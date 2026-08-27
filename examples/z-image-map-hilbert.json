@@ -1,0 +1,676 @@
+{
+  "id": "00000000-0000-4000-8000-000000000000",
+  "revision": 0,
+  "last_node_id": 14,
+  "last_link_id": 13,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "zit/z_image_turbo_fp8_folded.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "CLIPLoader",
+      "pos": [
+        40,
+        180
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen_3_4b_fp8_mixed.safetensors",
+        "lumina2",
+        "default"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "vae",
+          "type": "VAE",
+          "links": [
+            9
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "ae.safetensors"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ModelSamplingAuraFlow"
+      },
+      "widgets_values": [
+        3.0
+      ]
+    },
+    {
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [
+        400,
+        180
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "links": [
+            3,
+            5
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "an ornate hand-drawn map tile, muted parchment tones, fine ink linework, tiny buildings and trees"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        400,
+        420
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 7,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        400,
+        620
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ]
+    },
+    {
+      "id": 8,
+      "type": "KSampler",
+      "pos": [
+        820,
+        180
+      ],
+      "size": [
+        340,
+        260
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 4
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 6
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        0,
+        "randomize",
+        8,
+        1.0,
+        "res_multistep",
+        "simple",
+        1.0
+      ]
+    },
+    {
+      "id": 9,
+      "type": "VAEDecode",
+      "pos": [
+        1200,
+        180
+      ],
+      "size": [
+        320,
+        120
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 8
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            11
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 10,
+      "type": "PrimitiveInt",
+      "pos": [
+        820,
+        620
+      ],
+      "size": [
+        280,
+        60
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            10
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        0,
+        "increment"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "HilbertXY",
+      "pos": [
+        820,
+        730
+      ],
+      "size": [
+        280,
+        110
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "index",
+          "type": "INT",
+          "widget": {
+            "name": "index"
+          },
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "x",
+          "type": "INT",
+          "links": [
+            12
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "y",
+          "type": "INT",
+          "links": [
+            13
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "HilbertXY"
+      },
+      "widgets_values": [
+        0,
+        5,
+        4
+      ]
+    },
+    {
+      "id": 12,
+      "type": "SavePMTilesMap",
+      "pos": [
+        1200,
+        300
+      ],
+      "size": [
+        400,
+        560
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 11
+        },
+        {
+          "name": "x",
+          "type": "INT",
+          "widget": {
+            "name": "x"
+          },
+          "link": 12
+        },
+        {
+          "name": "y",
+          "type": "INT",
+          "widget": {
+            "name": "y"
+          },
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [],
+          "slot_index": 0
+        },
+        {
+          "name": "info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SavePMTilesMap"
+      },
+      "widgets_values": [
+        "results-hilbert",
+        5,
+        0,
+        0,
+        "slice",
+        "manual",
+        "256",
+        80,
+        0,
+        "xyz",
+        true,
+        true,
+        false,
+        "",
+        "z-image-turbo",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 13,
+      "type": "MarkdownNote",
+      "pos": [
+        1640,
+        180
+      ],
+      "size": [
+        470,
+        900
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "color": "#222",
+      "bgcolor": "#000",
+      "widgets_values": [
+        "## Save PMTiles Map Tile\n\nWrites each render into a **PMTiles v3** archive as WebP tiles at `z/x/y`, and\nrebuilds the coarser pyramid levels (`z-1` … `0`) so a whole session becomes one\nzoomable map.\n\nBrowse it at **http://127.0.0.1:8188/pmtiles/** — it refreshes as renders land.\nWith ComfyUI stopped: `./venv/bin/python tools/serve_pmtiles.py`\n\n### Inputs\n\n- **images** — renders to place. Every image in a batch gets its own cell.\n- **map_name** — writes `output/maps/<name>.pmtiles` plus `<name>.tiles.db`. The\n  `.db` is the source of truth (lossless PNG); the `.pmtiles` is rebuilt from it.\n- **z** — zoom level the render is placed on, i.e. the deepest level of the map.\n- **x**, **y** — tile coordinates at that zoom. Ignored when `coords_mode` is\n  `auto_grid`. Can be wired instead of typed.\n- **placement** — `slice` cuts the render into a tile grid at native pixels\n  (1024² with 256 px tiles → 4×4 tiles, which is exactly one tile at `z-2`).\n  `single_tile` resizes the whole render into one tile. `slice` falls back to\n  resizing, and says so, if the render is not a whole number of tiles.\n- **coords_mode** — `manual` uses `x`/`y`. `auto_grid` ignores them and takes the\n  next free block, scanning in growing squares rather than row-major, so\n  re-queueing grows a compact map with no bookkeeping.\n- **tile_size** — 256 or 512. One tile size per map; the store refuses to mix,\n  because the pyramid assumes it.\n- **webp_quality** — 80 by default, applied only when the archive is written. The\n  store stays lossless, so parent tiles never accumulate re-encode loss no matter\n  how many siblings arrive later. Changing this re-encodes every tile.\n- **pyramid_to_zoom** — build derived levels down to this zoom (`0` = a single\n  world tile holding everything).\n- **y_scheme** — how to read the `y` input: `xyz` (y from the top — Leaflet and\n  PMTiles) or `tms` (y from the bottom). Tiles are always *stored* XYZ.\n- **write_archive** — re-serialize the `.pmtiles` after this save. Turn off for a\n  big map and rebuild once with `tools/pmtiles_map.py --rebuild <map>`.\n- **embed_tile_metadata** — carry the per-tile records inside the archive, so the\n  single file is self-describing. Leaf tiles also get an XMP packet either way.\n- **store_full_prompt** — additionally keep the entire graph per tile in the `.db`.\n- **title**, **tags** — free text, shown in the viewer sidebar.\n\n### Outputs\n\n- **images** — passthrough, so the node can sit mid-chain.\n- **info** — what was placed where, as text.\n\nCaptured per tile: prompt, negative, seed, steps, cfg, sampler, scheduler,\ndenoise, model files, latent size, timestamp, title and tags. Click any tile in\nthe viewer to read them back.\n"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "MarkdownNote",
+      "pos": [
+        1640,
+        1110
+      ],
+      "size": [
+        470,
+        620
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "color": "#222",
+      "bgcolor": "#000",
+      "widgets_values": [
+        "## Hilbert Index → Tile X/Y\n\nTurns a single integer into `x`/`y` along a Hilbert curve, wired into the saver's\n`x`/`y` with **coords_mode = manual**.\n\n`PrimitiveInt` above holds the index with its control set to **increment**, so\nevery queue advances one step along the curve: consecutive renders land next to\neach other on the map *and* contiguously inside the archive, because PMTiles\norders its tiles by the same curve.\n\n### Inputs\n\n- **index** — position along the curve. Wraps at `4^order`.\n- **order** — the grid is `2^order` tiles a side; use the same value as the\n  saver's `z`.\n- **block_size** — tiles per render (a 1024 px render at 256 px tiles is 4). The\n  curve then walks *blocks* instead of tiles, so multi-tile renders cannot\n  overlap.\n\n### Outputs\n\n- **x**, **y** — top-left tile of the block.\n- **info** — the mapping, as text.\n\nAt `z=5` with 4×4-tile renders the curve is order 3, and indices 0–3 give\n(0,0) (0,4) (4,4) (4,0) — the curve's first \"U\".\n"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      4,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      5,
+      0,
+      "CLIP"
+    ],
+    [
+      3,
+      5,
+      0,
+      6,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      4,
+      4,
+      0,
+      8,
+      0,
+      "MODEL"
+    ],
+    [
+      5,
+      5,
+      0,
+      8,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      6,
+      6,
+      0,
+      8,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      7,
+      7,
+      0,
+      8,
+      3,
+      "LATENT"
+    ],
+    [
+      8,
+      8,
+      0,
+      9,
+      0,
+      "LATENT"
+    ],
+    [
+      9,
+      3,
+      0,
+      9,
+      1,
+      "VAE"
+    ],
+    [
+      10,
+      10,
+      0,
+      11,
+      0,
+      "INT"
+    ],
+    [
+      11,
+      9,
+      0,
+      12,
+      0,
+      "IMAGE"
+    ],
+    [
+      12,
+      11,
+      0,
+      12,
+      1,
+      "INT"
+    ],
+    [
+      13,
+      11,
+      1,
+      12,
+      2,
+      "INT"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "workflow_title": "Z-Image-Turbo — PMTiles map placed by a Hilbert index"
+  },
+  "version": 0.4
+}

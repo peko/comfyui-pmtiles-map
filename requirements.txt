@@ -1,0 +1,4 @@
+# The archive writer/reader. Pure python, ~30 KB wheel.
+# Already in ../../../wheelhouse/, so this installs offline:
+#   ./venv/bin/pip install --no-index --find-links=wheelhouse -r requirements.txt
+pmtiles==3.7.0

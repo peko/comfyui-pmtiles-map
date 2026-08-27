@@ -1,0 +1,26 @@
+[project]
+name = "comfyui-pmtiles-map"
+version = "0.1.0"
+description = "Save ComfyUI renders into a PMTiles archive as map tiles, with a built-in Leaflet viewer."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["pmtiles>=3.7"]
+keywords = ["comfyui", "pmtiles", "leaflet", "tiles", "map", "gallery"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.urls]
+Repository = "https://github.com/peko/comfyui-pmtiles-map"
+Issues = "https://github.com/peko/comfyui-pmtiles-map/issues"
+
+# https://docs.comfy.org/registry/overview -- consumed by `comfy node publish`
+[tool.comfy]
+PublisherId = ""
+DisplayName = "PMTiles Map"
+Icon = ""
+includes = []

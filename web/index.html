@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMTiles map</title>
+<link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="assets/viewer.css">
+</head>
+<body>
+<header>
+  <button id="left-toggle" class="icon" title="hide/show the panel (key: b)">☰</button>
+  <label>map
+    <select id="map-picker" title="press 1–9 to switch archive; the view is kept
+so two renderings of the same index can be compared"></select>
+  </label>
+  <span id="stats" class="stats">loading…</span>
+  <span class="spacer"></span>
+  <label class="toggle"><input type="checkbox" id="grid-toggle"> tile grid</label>
+  <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
+  <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
+  <button id="reload-tiles" class="icon" title="refetch every visible tile (key: r)">⟳</button>
+  <span id="pulse" class="pulse"></span>
+</header>
+
+<main>
+  <aside id="left">
+    <div class="tabs" role="tablist">
+      <button id="tab-search" class="tab active" role="tab">search</button>
+      <button id="tab-saved" class="tab" role="tab">liked <span id="saved-count" class="badge"></span></button>
+    </div>
+
+    <section id="pane-search" class="pane-body" role="tabpanel">
+      <input id="search-input" type="search" autocomplete="off"
+             placeholder="title, tags, prompt  ( / )">
+      <div id="search-hint" class="hint"></div>
+      <ol id="search-results" class="list"></ol>
+    </section>
+
+    <section id="pane-saved" class="pane-body" role="tabpanel" hidden>
+      <div class="actions">
+        <button id="save-tile" title="save the selected tile (key: s)">+ tile</button>
+        <button id="saved-copy" title="copy the list to the clipboard as JSON">copy</button>
+        <button id="saved-paste" title="replace the list from clipboard JSON">paste</button>
+      </div>
+      <div id="saved-msg" class="hint"></div>
+      <ol id="saved-list" class="list"></ol>
+      <div id="saved-empty" class="hint">Click a tile on the map, then “+ tile”.
+        Drag to reorder, double-click a name to rename.</div>
+    </section>
+  </aside>
+
+  <div id="map"></div>
+
+  <aside id="side">
+    <div id="side-empty" class="empty">Click a tile to see how it was made.</div>
+    <div id="side-body" hidden>
+      <div class="coord">
+        <code id="tile-coord"></code>
+        <button id="copy-coord" title="copy z/x/y">copy</button>
+        <button id="open-preview" title="full original image (or double-click the map)">⤢</button>
+      </div>
+      <img id="tile-thumb" alt="tile">
+      <dl id="tile-fields"></dl>
+      <details id="tile-raw-wrap">
+        <summary>raw metadata</summary>
+        <pre id="tile-raw"></pre>
+      </details>
+    </div>
+  </aside>
+</main>
+
+<div id="preview" hidden>
+  <div id="preview-frame">
+    <img id="preview-img" alt="full render">
+    <div id="preview-bar">
+      <span id="preview-caption"></span>
+      <span class="spacer"></span>
+      <a id="preview-link" href="#" target="_blank" rel="noopener">open raw</a>
+      <button id="preview-close" class="icon" title="close (Esc)">✕</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/vendor/leaflet/leaflet.js"></script>
+<script src="assets/viewer.js"></script>
+</body>
+</html>
