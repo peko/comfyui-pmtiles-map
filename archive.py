@@ -296,8 +296,14 @@ def archive_info(path):
         # skipped for size, so the viewer must not report "no metadata" on the
         # strength of the archive alone.
         "has_store": os.path.isfile(f"{os.path.splitext(path)[0]}.tiles.db"),
-        "pyramid_stale": tilestore.read_map_meta(
-            f"{os.path.splitext(path)[0]}.tiles.db", "pyramid_stale") == "1",
+        # The flag is set by a saver that skipped the pyramid, but maps written
+        # before it existed have no flag -- and a map whose every tile sits on one
+        # level has no pyramid whatever the flag says.
+        "pyramid_stale": (
+            tilestore.read_map_meta(f"{os.path.splitext(path)[0]}.tiles.db",
+                                    "pyramid_stale") == "1"
+            or (hdr["min_zoom"] == hdr["max_zoom"]
+                and hdr["addressed_tiles_count"] > 1)),
         "bytes": os.path.getsize(path),
         "mtime": os.stat(path).st_mtime,
     }

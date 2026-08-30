@@ -415,7 +415,38 @@ def main():
           truncated and len(capped) == 2, f"{len(capped)} changes, truncated={truncated}")
     fstore.close()
 
-    print("10. deferred pyramid")
+    print("10. opening a store that is not 256 px")
+    # Every maintenance path (CLI, the build job, PMTilesMapInfo) opens a store
+    # without stating a tile size. Defaulting to 256 there made all of them fail
+    # on a 512 px map with TileSizeMismatch -- the guard is for the saver, whose
+    # widget can disagree with the map, not for callers with no opinion.
+    big_db = os.path.join(args.out, "size512.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(big_db + suffix):
+            os.remove(big_db + suffix)
+    with tilestore.TileStore(big_db, 512) as st:
+        st.put_tile(2, 0, 0, numbered_tile(512, (200, 120, 40), "512"),
+                    meta={"kind": "leaf"})
+        st.db.commit()
+    with tilestore.TileStore(big_db) as st:
+        check("opening without a size adopts the store's own", st.tile_size == 512,
+              f"got {st.tile_size}")
+    try:
+        tilestore.TileStore(big_db, 256).close()
+        check("stating the wrong size still raises", False)
+    except tilestore.TileSizeMismatch:
+        check("stating the wrong size still raises", True)
+    with tilestore.TileStore(big_db, 512) as st:
+        check("stating the right size is accepted", st.tile_size == 512)
+    fresh = os.path.join(args.out, "size_default.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(fresh + suffix):
+            os.remove(fresh + suffix)
+    with tilestore.TileStore(fresh) as st:
+        check("a brand new store still defaults to 256", st.tile_size == 256,
+              f"got {st.tile_size}")
+
+    print("11. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")

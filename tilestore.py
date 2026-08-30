@@ -232,7 +232,14 @@ def read_meta(db_path, z, x, y):
 class TileStore:
     """SQLite-backed tile pyramid.  One file per map."""
 
-    def __init__(self, db_path, tile_size=256):
+    def __init__(self, db_path, tile_size=None):
+        """`tile_size=None` adopts whatever the store was created with.
+
+        Only a caller that *states* a size gets the mismatch guard -- that is the
+        saver, where the node's widget could disagree with the map. Maintenance
+        and read paths (the CLI, PMTilesMapInfo, the build job) have no opinion
+        and must not force 256 onto a 512 map.
+        """
         self.path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.db = sqlite3.connect(db_path, timeout=60.0)
@@ -243,11 +250,11 @@ class TileStore:
         self.db.execute("PRAGMA synchronous=NORMAL")
         stored = self.get_map_meta("tile_size")
         if stored is None:
-            self.set_map_meta("tile_size", str(int(tile_size)))
-            self.tile_size = int(tile_size)
+            self.tile_size = int(tile_size if tile_size is not None else 256)
+            self.set_map_meta("tile_size", str(self.tile_size))
         else:
             self.tile_size = int(stored)
-            if int(tile_size) != self.tile_size:
+            if tile_size is not None and int(tile_size) != self.tile_size:
                 raise TileSizeMismatch(
                     f"{db_path} was created with tile_size={self.tile_size}, "
                     f"cannot mix in tile_size={tile_size} -- the pyramid assumes "
