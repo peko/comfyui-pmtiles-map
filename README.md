@@ -74,6 +74,28 @@ renders, indices 0–3 give (0,0) (0,4) (4,4) (4,0).
 
 Reports tile counts per zoom, bounds and archive size for a map, as text.
 
+## Building the pyramid at the end, not on every save
+
+Recomposing ancestors on every save costs one recomposition *per level, per
+render*, and rewrites the shallow tiles once per render — on a full z=8 map
+(65536 leaves) the z=0 tile would be rebuilt 65536 times. Measured on 256 leaves
+at z=4: **1024 recompositions and 4.2 s**, against **85 and 0.6 s** for one
+bottom-up pass at the end. The archive rewrite is worse: it is O(whole map) per
+save, so a 135 MB archive over 1000 renders writes ~135 GB.
+
+For a large run:
+
+1. set the saver's **`pyramid_to_zoom` equal to `z`** (nothing is recomposed) and
+   **`write_archive` off** (nothing is re-serialized);
+2. when the run is done, press **⛰ build** in the viewer — or
+   `POST /pmtiles/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
+   followed by `--rebuild`.
+
+The build runs in a worker thread with progress, so the viewer (and a running
+ComfyUI) stay responsive. While the pyramid is missing the saver marks the map
+`pyramid_stale`, the viewer's build button lights up, and **zooming out is capped
+two levels below the deepest stored level** — see the note in the viewer section.
+
 ## Viewer
 
 `http://127.0.0.1:8188/pmtiles/` — or, with ComfyUI stopped:
@@ -96,6 +118,11 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   pasted link all restore the same place. Switching archives *keeps* the view —
   two maps built from the same index hold the same subject at the same
   coordinate, which is what makes them comparable.
+* **Zoom-out is capped** two levels below the archive's shallowest level. Leaflet
+  fills a missing level from the nearest native one *at the current scale*: with
+  only z=8 in the archive, map zoom 0 would ask for 2^8 × 2^8 = **65536 tiles**
+  and hang the browser. Two levels of upscaling is ~16 screenfuls. Build the
+  pyramid and the cap lifts by itself.
 
 | key | |
 |---|---|
@@ -116,6 +143,8 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 | `GET /pmtiles/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
 | `GET /pmtiles/{name}/render/{z}/{x}/{y}` | the original render, stitched; `?format=webp` |
 | `GET /pmtiles/{name}/search?q=` | title/tags/prompt, terms ANDed |
+| `POST /pmtiles/{name}/build` | recompose the pyramid and re-serialize, in a worker thread; `?pyramid=0` / `?archive=0` / `?min_zoom=` |
+| `GET /pmtiles/{name}/build` | that job's progress |
 | `GET /pmtiles/{name}/changes?since=` | which tiles changed since a sequence number |
 | `GET /pmtiles/{name}/events?since=` | the same feed as SSE |
 | `GET /pmtiles/{name}/file` | the raw archive, served with `Range` — point pmtiles.js or MapLibre at it |

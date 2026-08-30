@@ -17,6 +17,12 @@ const TRANSPARENT_PX =
  * its own coordinates. See TILE_PX and `shift` below. */
 const TILE_PX = 256;
 
+/* How far below the archive's shallowest level the map may still zoom out.
+ * Leaflet serves a missing level from the nearest native one at the current
+ * scale, so each level costs 4x the tiles: two levels is ~16 screenfuls,
+ * eight (a z=8 map with no pyramid, viewed at z=0) is 65536 tiles. */
+const UPSCALE_LEVELS = 2;
+
 const el = (id) => document.getElementById(id);
 const state = {
   map: null,
@@ -124,7 +130,7 @@ function writeUrlState() {
  */
 function applyUrlView(view, maxZoom) {
   if (view.z === null || view.x === null || view.y === null) return false;
-  const z = Math.max(0, Math.min(view.z, maxZoom));
+  const z = Math.max(state.floorZoom || 0, Math.min(view.z, maxZoom));
   const latlng = state.map.unproject(
     L.point(view.x * TILE_PX, view.y * TILE_PX), view.z);
   state.map.setView(latlng, z, { animate: false });
@@ -162,6 +168,8 @@ function showMap(info) {
   const tileSize = Number(info.tile_size) || 256;
   const shift = zoomShift(tileSize);
   state.shift = shift;
+  state.floorZoom = Math.max(0, info.min_zoom + shift - UPSCALE_LEVELS);
+  map.setMinZoom(state.floorZoom);
   const [w, s, e, n] = info.bounds;
   const bounds = L.latLngBounds([[s, w], [n, e]]);
 
@@ -173,7 +181,13 @@ function showMap(info) {
     `/pmtiles/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`,
     {
       tileSize,
-      minZoom: 0,
+      // Never let the map zoom far below the shallowest level the archive
+      // actually has. Leaflet fills a missing level by requesting the nearest
+      // native one at the *current* scale: with only z=8 in the archive, map
+      // zoom 0 asks for 2^8 x 2^8 = 65536 tiles and the browser dies. Two levels
+      // of upscaling is ~16 screenfuls of tiles, which is survivable; beyond
+      // that, build the pyramid.
+      minZoom: state.floorZoom,
       // Zoom past the deepest stored level so single tiles can be inspected;
       // Leaflet upscales rather than 404-ing once past maxNativeZoom.
       maxZoom: info.max_zoom + shift + 4,
@@ -222,7 +236,8 @@ function showMap(info) {
     state.pendingCoord = null;
     gotoTile(target);
   } else if (!applyUrlView(view, info.max_zoom + shift + 4)) {
-    map.fitBounds(bounds, { animate: false, padding: [8, 8] });
+    map.fitBounds(bounds, { animate: false, padding: [8, 8],
+      minZoom: state.floorZoom });
   }
   writeUrlState();
   setStats(info);
@@ -253,7 +268,10 @@ function setStats(info) {
   el('stats').textContent =
     `${info.tiles} tiles (${info.unique_tiles} unique) · z${info.min_zoom}–${info.max_zoom} · `
     + `${info.tile_size || 256}px · ${fmtBytes(info.bytes)}`
-    + (info.has_tile_metadata || info.has_store ? '' : ' · no per-tile metadata');
+    + (info.has_tile_metadata || info.has_store ? '' : ' · no per-tile metadata')
+    + (info.pyramid_stale
+      ? ` · no pyramid, zoom-out capped at z${state.floorZoom}` : '');
+  el('build-map').classList.toggle('stale', !!info.pyramid_stale);
 }
 
 /* ------------------------------------------------------------------ sidebar */
@@ -1070,6 +1088,69 @@ function reloadTiles() {
 }
 
 el('reload-tiles').addEventListener('click', reloadTiles);
+
+/* ------------------------------------------------------------ build on demand */
+/* Recomposing the pyramid on every save costs one recomposition per level per
+ * render, and rewrites the shallow tiles once per render — 65536 times for z=0
+ * on a full z=8 map. Set the saver's pyramid_to_zoom to its z while rendering,
+ * then build the levels here, once, in a single bottom-up pass. */
+
+async function buildMap() {
+  if (!state.name || state.building) return;
+  const button = el('build-map');
+  state.building = true;
+  button.disabled = true;
+  try {
+    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}/build`,
+      { method: 'POST' });
+    if (!res.ok) {
+      setStats(state.meta);
+      el('stats').textContent = `build refused: ${res.status}`;
+      state.building = false;
+      button.disabled = false;
+      return;
+    }
+  } catch (err) {
+    state.building = false;
+    button.disabled = false;
+    return;
+  }
+  pollBuild();
+}
+
+async function pollBuild() {
+  if (!state.name) return;
+  let job = null;
+  try {
+    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}/build`);
+    job = res.ok ? await res.json() : null;
+  } catch (err) { /* keep polling; the server may be busy encoding */ }
+
+  if (job && job.state === 'running') {
+    const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+    el('stats').textContent = `building ${job.phase}`
+      + (job.level !== undefined && job.phase === 'pyramid' ? ` z${job.level}` : '')
+      + ` — ${job.done}/${job.total} (${pct}%)`;
+    setTimeout(pollBuild, 500);
+    return;
+  }
+
+  state.building = false;
+  el('build-map').disabled = false;
+  if (job && job.state === 'error') {
+    el('stats').textContent = `build failed: ${job.error}`;
+    return;
+  }
+  if (job && job.state === 'done') {
+    el('stats').textContent = `built ${job.derived || 0} derived tile(s) in `
+      + `${(job.seconds || 0).toFixed(1)} s`;
+  }
+  // The zoom range changed, so rebuild the layer from fresh info.
+  state.name = null;               // force showMap on the next poll
+  refreshMaps({ initial: true });
+}
+
+el('build-map').addEventListener('click', buildMap);
 
 function pulse() {
   const dot = el('pulse');

@@ -184,9 +184,19 @@ class SavePMTilesMap:
                              f"z={z} x={x0} y={y0}")
 
             derived = store.recompose_ancestors(placed, min_zoom=pyramid_to_zoom)
+            if pyramid_to_zoom >= z:
+                # Nothing was recomposed: the coarse levels are missing, and the
+                # viewer should offer to build them rather than pretend the map is
+                # complete. Doing it per save costs `depth` recompositions per
+                # render and rewrites the shallow tiles once per render -- 65536
+                # times for z=0 on a full z=8 map.
+                store.set_map_meta("pyramid_stale", "1")
+                lines.append("pyramid: skipped (build it from the viewer or "
+                             "tools/pmtiles_map.py --rebuild-pyramid)")
+            else:
+                lines.append(f"pyramid: {len(derived)} derived tile(s) down to "
+                             f"z={pyramid_to_zoom}")
             store.db.commit()
-            lines.append(f"pyramid: {len(derived)} derived tile(s) down to "
-                         f"z={pyramid_to_zoom}")
             stats = store.stats()
 
             if write_archive:

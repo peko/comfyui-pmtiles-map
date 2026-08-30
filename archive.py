@@ -97,7 +97,7 @@ def xmp_packet(meta):
 
 def build_archive(store, out_path, webp_quality=80, embed_tile_metadata=True,
                   name=None, description="", attribution="",
-                  metadata_budget=8 * 1024 * 1024, log=print):
+                  metadata_budget=8 * 1024 * 1024, log=print, progress=None):
     """Write every tile in `store` to `out_path` as WebP.  Atomic replace.
 
     `embed_tile_metadata` controls the archive's single metadata blob only; a
@@ -146,7 +146,9 @@ def build_archive(store, out_path, webp_quality=80, embed_tile_metadata=True,
     seen = {}
     with open(tmp, "wb") as fh:
         writer = Writer(fh)
-        for z, x, y in ordered:
+        for index, (z, x, y) in enumerate(ordered):
+            if progress and (index % 256 == 0 or index + 1 == len(ordered)):
+                progress(index + 1, len(ordered))
             # Encoding dominates the rebuild (7 s for 1000 tiles), and a save
             # only changes a handful of tiles, so cache the WebP in the store and
             # re-encode just what put_tile invalidated.
@@ -294,6 +296,8 @@ def archive_info(path):
         # skipped for size, so the viewer must not report "no metadata" on the
         # strength of the archive alone.
         "has_store": os.path.isfile(f"{os.path.splitext(path)[0]}.tiles.db"),
+        "pyramid_stale": tilestore.read_map_meta(
+            f"{os.path.splitext(path)[0]}.tiles.db", "pyramid_stale") == "1",
         "bytes": os.path.getsize(path),
         "mtime": os.stat(path).st_mtime,
     }

@@ -57,6 +57,10 @@ button.icon {
   padding: 2px 7px; line-height: 1.3;
 }
 button.icon:hover { color: var(--fg); border-color: var(--accent); }
+button.icon:disabled { opacity: .5; cursor: default; }
+/* The pyramid is missing, so zooming out is capped: say so on the button. */
+button.icon.stale { color: #ffce6b; border-color: #7a6132; }
+button.icon.stale::after { content: ' •'; }
 #map.grid .leaflet-tile { outline: 1px solid rgba(124, 196, 255, .35); outline-offset: -1px; }
 
 aside {

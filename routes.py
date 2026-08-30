@@ -40,6 +40,8 @@ _CONTENT_TYPES = {
 
 
 _EMPTY = None
+# One build job per map, in-process: state for the viewer to poll.
+_JOBS = {}
 
 
 def _empty_tile():
@@ -234,6 +236,77 @@ def build_routes(maps_dir_fn):
             "X-Render-Kind": kind,
             "X-Render-Size": f"{image.width}x{image.height}",
         })
+
+    @routes.get("/pmtiles/{name}/build")
+    async def build_status(request):
+        return web.json_response(_JOBS.get(request.match_info["name"])
+                                 or {"state": "idle"},
+                                 headers={"Cache-Control": "no-cache"})
+
+    @routes.post("/pmtiles/{name}/build")
+    async def build(request):
+        """Recompose the pyramid in one pass, then re-serialize the archive.
+
+        Both are O(whole map), so this runs in a worker thread and reports
+        progress -- on a 65k-tile map it is minutes, and the event loop still has
+        a viewer (and possibly a running ComfyUI) to serve.
+        """
+        name = request.match_info["name"]
+        maps = maps_dir_fn()
+        _archive_for(maps, name)
+        job = _JOBS.get(name)
+        if job and job.get("state") == "running":
+            raise web.HTTPConflict(reason="a build is already running for this map")
+
+        want_pyramid = request.query.get("pyramid", "1") != "0"
+        want_archive = request.query.get("archive", "1") != "0"
+        try:
+            min_zoom = int(request.query.get("min_zoom", 0))
+            quality = int(request.query.get("quality", 80))
+        except ValueError:
+            raise web.HTTPBadRequest(reason="min_zoom and quality must be integers")
+
+        state = {"state": "running", "phase": "starting", "done": 0, "total": 0,
+                 "derived": 0, "seconds": 0.0}
+        _JOBS[name] = state
+
+        def work():
+            import time as _time
+            start = _time.perf_counter()
+            db_path = os.path.join(maps, f"{name}.tiles.db")
+            with tilestore.TileStore(db_path) as store:
+                if want_pyramid:
+                    state["phase"] = "pyramid"
+
+                    def on_level(level, done, total):
+                        state.update(level=level, done=done, total=total)
+
+                    written = store.rebuild_pyramid(min_zoom, progress=on_level)
+                    state["derived"] = len(written)
+                    store.db.commit()
+                if want_archive:
+                    state["phase"] = "archive"
+                    info = archive.build_archive(
+                        store, os.path.join(maps, f"{name}.pmtiles"),
+                        webp_quality=quality, name=name,
+                        progress=lambda done, total: state.update(done=done,
+                                                                  total=total))
+                    state["tiles"] = info["tiles"]
+                    state["encoded"] = info["encoded"]
+            state["seconds"] = _time.perf_counter() - start
+            state["phase"] = "done"
+            state["state"] = "done"
+
+        async def run():
+            try:
+                await asyncio.to_thread(work)
+            except Exception as exc:                      # report, never crash
+                state.update(state="error", phase="error",
+                             error=f"{type(exc).__name__}: {exc}")
+
+        asyncio.create_task(run())
+        return web.json_response({"started": True, "map": name,
+                                  "pyramid": want_pyramid, "archive": want_archive})
 
     @routes.get("/pmtiles/{name}/search")
     async def search(request):

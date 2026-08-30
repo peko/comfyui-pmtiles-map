@@ -415,6 +415,44 @@ def main():
           truncated and len(capped) == 2, f"{len(capped)} changes, truncated={truncated}")
     fstore.close()
 
+    print("10. deferred pyramid")
+    # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
+    # produce exactly the same pyramid, for far less work.
+    each_db = os.path.join(args.out, "pyr_each.tiles.db")
+    defer_db = os.path.join(args.out, "pyr_defer.tiles.db")
+    for db in (each_db, defer_db):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(db + suffix):
+                os.remove(db + suffix)
+    side = 8
+    counts = {}
+    for db, defer in ((each_db, False), (defer_db, True)):
+        st = tilestore.TileStore(db, ts)
+        n = [0]
+        original = st._recompose
+        st._recompose = lambda z, x, y: (n.__setitem__(0, n[0] + 1), original(z, x, y))[1]
+        for iy in range(side):
+            for ix in range(side):
+                st.put_tile(4, ix, iy, numbered_tile(ts, colour(iy * side + ix, 64), ""),
+                            meta={"kind": "leaf"})
+                if not defer:
+                    st.recompose_ancestors([(4, ix, iy)], 0)
+        if defer:
+            st.rebuild_pyramid(0)
+        st.db.commit()
+        counts[defer] = (n[0], {(z, x, y) for z, x, y in st.all_coords()})
+        st.close()
+    check("deferred build produces the identical tile set",
+          counts[True][1] == counts[False][1],
+          f"{len(counts[True][1])} vs {len(counts[False][1])} tiles")
+    check("and does far less work",
+          counts[True][0] * 4 < counts[False][0],
+          f"{counts[True][0]} recompositions vs {counts[False][0]}")
+    with tilestore.TileStore(defer_db, ts) as st:
+        check("a deferred build clears the stale flag",
+              st.get_map_meta("pyramid_stale") == "0",
+              str(st.get_map_meta("pyramid_stale")))
+
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):
             bench(args.out, n, ts, args.quality)
