@@ -118,11 +118,16 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   pasted link all restore the same place. Switching archives *keeps* the view —
   two maps built from the same index hold the same subject at the same
   coordinate, which is what makes them comparable.
-* **Zoom-out is capped** two levels below the archive's shallowest level. Leaflet
-  fills a missing level from the nearest native one *at the current scale*: with
-  only z=8 in the archive, map zoom 0 would ask for 2^8 × 2^8 = **65536 tiles**
-  and hang the browser. Two levels of upscaling is ~16 screenfuls. Build the
-  pyramid and the cap lifts by itself.
+* **Zoom is bounded by what the archive holds** — two levels below its
+  shallowest, one above its deepest, via Leaflet's own `minZoom`/`maxZoom`.
+  Zooming out matters most: Leaflet fills a missing level from the nearest
+  native one *at the current scale*, so with only z=8 in the archive, map zoom 0
+  would ask for 2^8 × 2^8 = **65536 tiles** and hang the browser. Two levels of
+  upscaling is ~16 screenfuls. Build the pyramid and the cap lifts by itself.
+* **Switching archives reconciles the zoom** into the new map's range explicitly
+  (widen the limits, place the view, clamp, tighten) rather than letting Leaflet
+  clamp it — which would animate mid-switch and make the outgoing layer fetch
+  tiles for a map you are leaving.
 
 | key | |
 |---|---|

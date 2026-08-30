@@ -23,6 +23,11 @@ const TILE_PX = 256;
  * eight (a z=8 map with no pyramid, viewed at z=0) is 65536 tiles. */
 const UPSCALE_LEVELS = 2;
 
+/* And how far past the deepest stored level zooming in may go. Over-zoom costs
+ * no extra requests -- Leaflet upscales tiles it already has -- but past a level
+ * or so it is just a blurry lie about what the archive holds. */
+const OVERZOOM_LEVELS = 1;
+
 const el = (id) => document.getElementById(id);
 const state = {
   map: null,
@@ -167,13 +172,36 @@ function showMap(info) {
 
   const tileSize = Number(info.tile_size) || 256;
   const shift = zoomShift(tileSize);
+  const floor = Math.max(0, info.min_zoom + shift - UPSCALE_LEVELS);
+  const ceiling = info.max_zoom + shift + OVERZOOM_LEVELS;
   state.shift = shift;
-  state.floorZoom = Math.max(0, info.min_zoom + shift - UPSCALE_LEVELS);
-  map.setMinZoom(state.floorZoom);
+  state.floorZoom = floor;
+  state.ceilingZoom = ceiling;
   const [w, s, e, n] = info.bounds;
   const bounds = L.latLngBounds([[s, w], [n, e]]);
 
-  if (state.layer) state.layer.remove();
+  // Drop the outgoing layer before touching the zoom: a clamp below would
+  // otherwise send it fetching tiles for the map we are leaving.
+  if (state.layer) { state.layer.remove(); state.layer = null; }
+
+  // Switching archives usually leaves the current zoom outside the new map's
+  // range. Do it explicitly rather than letting Leaflet clamp: widen the limits
+  // to the union first (so setView is not clipped by the map we are leaving),
+  // place the view, then tighten to the new range -- by which point the zoom is
+  // already inside it, so nothing has to be clamped, animated or re-fired.
+  map.setMinZoom(Math.min(floor, map.getMinZoom()));
+  map.setMaxZoom(Math.max(ceiling, map.getMaxZoom()));
+
+  const view = readUrlState();
+  if (state.pendingCoord || !applyUrlView(view, ceiling)) {
+    // fitBounds has a maxZoom option but no minZoom, so clamp after it.
+    map.fitBounds(bounds, { animate: false, padding: [8, 8], maxZoom: ceiling });
+  }
+  if (map.getZoom() < floor) map.setZoom(floor, { animate: false });
+  if (map.getZoom() > ceiling) map.setZoom(ceiling, { animate: false });
+  map.setMinZoom(floor);
+  map.setMaxZoom(ceiling);
+
   // No ?v= cache-buster in the template: it would make every rebuild a new URL
   // for every tile, i.e. a full reload. Freshness comes from per-tile ETags,
   // and only the tiles the change feed names get refetched.
@@ -187,10 +215,10 @@ function showMap(info) {
       // zoom 0 asks for 2^8 x 2^8 = 65536 tiles and the browser dies. Two levels
       // of upscaling is ~16 screenfuls of tiles, which is survivable; beyond
       // that, build the pyramid.
-      minZoom: state.floorZoom,
+      minZoom: floor,
       // Zoom past the deepest stored level so single tiles can be inspected;
       // Leaflet upscales rather than 404-ing once past maxNativeZoom.
-      maxZoom: info.max_zoom + shift + 4,
+      maxZoom: ceiling,
       // minNativeZoom/maxNativeZoom are compared against the MAP zoom
       // (GridLayer._clampZoom(map.getZoom())), while zoomOffset is applied only
       // when building the URL (_getZoomForUrl). With 512 px tiles the map runs
@@ -225,19 +253,11 @@ function showMap(info) {
     if (ev.coords) state.errored.add(`${ev.coords.x}:${ev.coords.y}:${ev.coords.z}`);
   });
 
-  map.setMaxZoom(info.max_zoom + shift + 4);
-
-  // A view from the URL wins over fitting the bounds -- for a refresh *and* for
-  // a switch to another archive, which is how you compare two of them. A pending
-  // coordinate (a saved POI in another archive) outranks both.
-  const view = readUrlState();
+  // A saved POI in another archive outranks the view restored above.
   if (state.pendingCoord) {
     const target = state.pendingCoord;
     state.pendingCoord = null;
     gotoTile(target);
-  } else if (!applyUrlView(view, info.max_zoom + shift + 4)) {
-    map.fitBounds(bounds, { animate: false, padding: [8, 8],
-      minZoom: state.floorZoom });
   }
   writeUrlState();
   setStats(info);
@@ -1020,13 +1040,20 @@ async function refreshMaps({ initial = false } = {}) {
     // every poll took the branch below and redrew the whole layer — a tile would
     // update from the feed and then blink out as the redraw refetched it.
     const shift = state.shift || 0;
-    if (target.max_zoom + shift !== state.layer.options.maxNativeZoom) {
-      // The pyramid grew a level. Only the zoom limits change; existing tiles are
-      // still valid, so do NOT redraw — the new level loads when zoomed into, and
-      // changed tiles arrive through the feed.
+    if (target.max_zoom + shift !== state.layer.options.maxNativeZoom
+        || target.min_zoom + shift !== state.layer.options.minNativeZoom) {
+      // The pyramid grew or was built. Only the zoom limits change; existing
+      // tiles are still valid, so do NOT redraw — the new levels load when
+      // zoomed to, and changed tiles arrive through the feed. Both ends move:
+      // building the pyramid drops min_zoom, which lifts the zoom-out cap.
+      state.floorZoom = Math.max(0, target.min_zoom + shift - UPSCALE_LEVELS);
+      state.ceilingZoom = target.max_zoom + shift + OVERZOOM_LEVELS;
       state.layer.options.maxNativeZoom = target.max_zoom + shift;
       state.layer.options.minNativeZoom = target.min_zoom + shift;
-      map.setMaxZoom(target.max_zoom + shift + 4);
+      state.layer.options.minZoom = state.floorZoom;
+      state.layer.options.maxZoom = state.ceilingZoom;
+      map.setMinZoom(state.floorZoom);
+      map.setMaxZoom(state.ceilingZoom);
     }
     setStats(target);
     pulse();
