@@ -107,6 +107,12 @@ class SavePMTilesMap:
                                            "CLIPTextEncode.text here."}),
                 "negative_text": ("STRING", {"default": "", "multiline": True,
                                   "tooltip": "same, for the negative prompt"}),
+                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
+                            "tooltip": "the image the node shows in the graph is a "
+                                       "file in ComfyUI/temp. `full` writes the whole "
+                                       "render (~290 KB each, measured); `thumbnail` "
+                                       "writes a 384 px WebP (~40 KB); `off` writes "
+                                       "nothing -- the map itself is the preview."}),
                 "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
                                   "tooltip": "batch the archive rewrite: serialize "
                                              "only once at least this many tiles are "
@@ -131,7 +137,7 @@ class SavePMTilesMap:
     def save(self, images, map_name, z, x, y, placement, coords_mode, tile_size,
              webp_quality, pyramid_to_zoom, y_scheme, write_archive,
              embed_tile_metadata, store_full_prompt, title, tags,
-             prompt_text="", negative_text="", archive_every=0,
+             prompt_text="", negative_text="", preview="thumbnail", archive_every=0,
              prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
@@ -239,7 +245,7 @@ class SavePMTilesMap:
         text = "\n".join(lines)
         print(f"[pmtiles-map] {name}\n  " + "\n  ".join(lines))
         return {
-            "ui": {"images": self._previews(images), "text": [text]},
+            "ui": {"images": self._previews(images, preview), "text": [text]},
             "result": (images, text),
         }
 
@@ -259,8 +265,20 @@ class SavePMTilesMap:
                    f"by {ts})")
         return [((0, 0), pil.resize((ts, ts), Image.LANCZOS))], 1, 1, how
 
-    def _previews(self, images):
-        """Temp-dir previews so the node shows what it just placed."""
+    PREVIEW_PX = 384
+
+    def _previews(self, images, mode="thumbnail"):
+        """The image the node shows in the graph, as a file in ComfyUI/temp.
+
+        ComfyUI renders a node's preview from a file it can fetch through /view,
+        so there is no way to show one without writing something. What there is a
+        way to avoid is writing the *whole render*: measured 290 KB per preview on
+        a real run, for a thumbnail nobody zooms into -- the map is the preview
+        that matters. `thumbnail` writes a 384 px WebP instead (~40 KB), `off`
+        writes nothing at all.
+        """
+        if mode == "off":
+            return []
         results = []
         try:
             full_output_folder, filename, counter, subfolder, _ = \
@@ -268,9 +286,15 @@ class SavePMTilesMap:
                     "pmtiles" + self.prefix_append, self.temp_dir,
                     images[0].shape[1], images[0].shape[0])
             for index, image in enumerate(images):
-                file = f"{filename}_{counter + index:05}_.png"
-                tensor_to_pil(image).save(os.path.join(full_output_folder, file),
-                                          compress_level=4)
+                img = tensor_to_pil(image)
+                if mode == "thumbnail":
+                    img.thumbnail((self.PREVIEW_PX, self.PREVIEW_PX), Image.LANCZOS)
+                    file = f"{filename}_{counter + index:05}_.webp"
+                    img.save(os.path.join(full_output_folder, file),
+                             format="WEBP", quality=85, method=4)
+                else:
+                    file = f"{filename}_{counter + index:05}_.png"
+                    img.save(os.path.join(full_output_folder, file), compress_level=4)
                 results.append({"filename": file, "subfolder": subfolder,
                                 "type": "temp"})
         except Exception as exc:                # a preview is never worth failing on

@@ -51,6 +51,7 @@ levels down to `pyramid_to_zoom`.
 | `embed_tile_metadata` | carry per-tile records inside the archive, so the single file is self-describing |
 | `store_full_prompt` | additionally keep the entire prompt graph per tile in the store |
 | `title`, `tags` | free text, shown in the viewer and searchable |
+| `preview` *(optional)* | the thumbnail the node shows in the graph, written to `ComfyUI/temp`: `thumbnail` (384 px WebP, ~42 KB, default), `full` (the whole render, ~2.8 MB), `off` (nothing) |
 | `prompt_text`, `negative_text` *(optional)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text` |
 
 Outputs `images` (passthrough, so it can sit mid-chain) and `info` (what was
@@ -93,6 +94,7 @@ almost nothing):
 |---|---|---|
 | store (SQLite) | **~40 KB** of WAL, 0.1 s | changed pages, *not* file size — 40 KB at 4 MB, 44 KB at 35 MB |
 | archive (`.pmtiles`) | **the whole file** — 22 MB at 2k tiles, 135 MB at 20k | the map |
+| node preview in `temp/` | **2.8 MB** as `full`, **42 KB** as `thumbnail`, 0 as `off` | the render |
 
 So the GB-sized `.tiles.db` files next to your archives are *not* rewritten per
 tile; only the archive is. That makes `archive_every` the one knob that matters
