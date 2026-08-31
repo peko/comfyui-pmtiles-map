@@ -97,22 +97,14 @@ class SavePMTilesMap:
             # Optional, not required: appending a *required* input would break
             # every already-saved API prompt ("Required input is missing"), and
             # optional inputs still render as widgets and can still be wired.
+            #
+            # Order within this block is grouped by subject -- the two write knobs
+            # first, then the metadata text -- but it cannot be merged with the
+            # `write_archive` group above: ComfyUI renders required inputs before
+            # optional ones, and `widgets_values` in a saved workflow is
+            # positional, so moving anything across that boundary would feed old
+            # graphs' values into the wrong fields.
             "optional": {
-                "prompt_text": ("STRING", {"default": "", "multiline": True,
-                                "tooltip": "the prompt to record, when the graph "
-                                           "builds it at runtime (FormattedString, "
-                                           "wildcards, a list selector) and it "
-                                           "therefore cannot be read off the graph. "
-                                           "Wire the same string that feeds "
-                                           "CLIPTextEncode.text here."}),
-                "negative_text": ("STRING", {"default": "", "multiline": True,
-                                  "tooltip": "same, for the negative prompt"}),
-                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
-                            "tooltip": "the image the node shows in the graph is a "
-                                       "file in ComfyUI/temp. `full` writes the whole "
-                                       "render (~290 KB each, measured); `thumbnail` "
-                                       "writes a 384 px WebP (~40 KB); `off` writes "
-                                       "nothing -- the map itself is the preview."}),
                 "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
                                   "tooltip": "batch the archive rewrite: serialize "
                                              "only once at least this many tiles are "
@@ -122,6 +114,21 @@ class SavePMTilesMap:
                                              "a 20k-tile map -- while the store costs "
                                              "~40 KB, so this is the knob that saves "
                                              "the disk."}),
+                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
+                            "tooltip": "the image the node shows in the graph is a "
+                                       "file in ComfyUI/temp. `full` writes the whole "
+                                       "render (~2.8 MB each, measured); `thumbnail` "
+                                       "writes a 384 px WebP (~42 KB); `off` writes "
+                                       "nothing -- the map itself is the preview."}),
+                "prompt_text": ("STRING", {"default": "", "multiline": True,
+                                "tooltip": "the prompt to record, when the graph "
+                                           "builds it at runtime (FormattedString, "
+                                           "wildcards, a list selector) and it "
+                                           "therefore cannot be read off the graph. "
+                                           "Wire the same string that feeds "
+                                           "CLIPTextEncode.text here."}),
+                "negative_text": ("STRING", {"default": "", "multiline": True,
+                                  "tooltip": "same, for the negative prompt"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -137,7 +144,7 @@ class SavePMTilesMap:
     def save(self, images, map_name, z, x, y, placement, coords_mode, tile_size,
              webp_quality, pyramid_to_zoom, y_scheme, write_archive,
              embed_tile_metadata, store_full_prompt, title, tags,
-             prompt_text="", negative_text="", preview="thumbnail", archive_every=0,
+             archive_every=0, preview="thumbnail", prompt_text="", negative_text="",
              prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
