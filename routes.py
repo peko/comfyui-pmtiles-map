@@ -79,13 +79,18 @@ def _pick_source(maps_dir, name, requested=None):
     raise web.HTTPNotFound(reason=f"no such map: {name}")
 
 
-def _store_tile(db_path, z, x, y, quality=80):
-    """Tile bytes from the store, encoding to WebP on first use."""
-    data, needs_encode = tilestore.read_tile_for_serving(db_path, z, x, y, quality)
+def _store_tile(db_path, z, x, y):
+    """Tile bytes from the store, encoding to WebP the first time one is asked for.
+
+    The encode uses the *map's own* quality, recorded by the saver, so a tile the
+    viewer warms is exactly the one build_archive will reuse instead of redoing.
+    """
+    data, needs_encode = tilestore.read_tile_for_serving(db_path, z, x, y)
     if data is None:
         return None
     if not needs_encode:
         return data
+    quality = int(tilestore.read_map_meta(db_path, "webp_quality", 80) or 80)
     blob = archive.encode_webp(tilestore.open_png(data), quality=quality, method=4)
     tilestore.write_webp_cache(db_path, z, x, y, blob, quality)
     return blob

@@ -204,13 +204,19 @@ def write_webp_cache(db_path, z, x, y, blob, quality):
         pass
 
 
-def read_tile_for_serving(db_path, z, x, y, quality=80):
-    """(webp bytes, needs_caching) for a tile in the store, or (None, False).
+def read_tile_for_serving(db_path, z, x, y):
+    """(bytes, needs_encoding) for a tile in the store, or (None, False).
 
     The live viewer reads here rather than from the archive, so a run never has
     to serialize just to be watched. Measured on a 21846-tile map: 0.36 ms per
     tile from this cache against 2.11 ms through the archive's directory, for
     identical bytes.
+
+    **Any** cached WebP counts as a hit, whatever quality it was encoded at: a
+    viewer wants pixels, not a particular q. Demanding a match meant that on a
+    map saved at q90 every view re-encoded the tile at q80 and overwrote the
+    cache, after which the next archive build re-encoded it back -- the two
+    fighting over the very cache that exists to avoid the work.
     """
     db = _read_only(db_path)
     if db is None:
@@ -225,8 +231,8 @@ def read_tile_for_serving(db_path, z, x, y, quality=80):
         db.close()
     if row is None:
         return None, False
-    webp, webp_q, png = row
-    if webp is not None and webp_q == int(quality):
+    webp, _webp_q, png = row
+    if webp is not None:
         return webp, False
     return png, True            # caller encodes; PNG is the lossless original
 

@@ -219,6 +219,9 @@ class SavePMTilesMap:
             else:
                 lines.append(f"pyramid: {len(derived)} derived tile(s) down to "
                              f"z={pyramid_to_zoom}")
+            # So a tile the viewer encodes on demand matches what the archive
+            # build wants, instead of the two overwriting each other's cache.
+            store.set_map_meta("webp_quality", int(webp_quality))
             pending = store.bump_pending(len(placed) + len(derived))
             store.db.commit()
             stats = store.stats()

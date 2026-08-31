@@ -493,6 +493,28 @@ def main():
         st.put_tile(3, 1, 0, numbered_tile(ts, (80, 200, 120), "b"), meta={"kind": "leaf"})
         st.db.commit()
 
+    # Serving must not fight the archive over the encode cache. A map saved at a
+    # non-default quality used to lose that fight both ways: every view
+    # re-encoded the tile at 80 and overwrote the cache, then every build
+    # re-encoded it back.
+    q_db = os.path.join(args.out, "quality.tiles.db")
+    q_pmt = os.path.join(args.out, "quality.pmtiles")
+    for path in (q_pmt, *(q_db + sfx for sfx in ("", "-wal", "-shm"))):
+        if os.path.exists(path):
+            os.remove(path)
+    with tilestore.TileStore(q_db, ts) as st:
+        for i in range(4):
+            st.put_tile(4, i, 0, numbered_tile(ts, colour(i, 4), ""), meta={"kind": "leaf"})
+        st.set_map_meta("webp_quality", 90)
+        st.db.commit()
+        archive.build_archive(st, q_pmt, webp_quality=90, name="quality")
+    _, again = tilestore.read_tile_for_serving(q_db, 4, 0, 0)
+    check("a q90 tile is served from cache, not re-encoded at 80", again is False)
+    with tilestore.TileStore(q_db) as st:
+        info = archive.build_archive(st, q_pmt, webp_quality=90, name="quality")
+    check("so the next build re-encodes nothing", info["encoded"] == 0,
+          f"{info['encoded']} re-encoded")
+
     data, needs_encode = tilestore.read_tile_for_serving(live_db, 3, 1, 0)
     check("an unserialized tile is readable from the store", data is not None)
     check("and needs encoding the first time", needs_encode is True)
