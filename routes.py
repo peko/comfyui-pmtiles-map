@@ -131,7 +131,7 @@ def build_routes(maps_dir_fn):
                                    "application/octet-stream")
         return web.FileResponse(full, headers={"Content-Type": ctype})
 
-    @routes.get("/map/maps")
+    @routes.get("/map/list")
     async def maps(request):
         return web.json_response({"maps": archive.list_archives(maps_dir_fn())})
 

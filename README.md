@@ -189,7 +189,7 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 
 | route | |
 |---|---|
-| `GET /map/maps` | archives in the maps dir, with zoom range and bounds |
+| `GET /map/list` | archives in the maps dir, with zoom range and bounds |
 | `GET /map/{name}/meta.json` | header + whether a store is present |
 | `GET /map/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
 | `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |

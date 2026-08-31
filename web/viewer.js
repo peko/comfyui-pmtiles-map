@@ -1036,7 +1036,7 @@ async function pollChanges() {
 async function refreshMaps({ initial = false } = {}) {
   let maps = [];
   try {
-    const res = await fetch('/map/maps');
+    const res = await fetch('/map/list');
     maps = (await res.json()).maps || [];
   } catch (err) {
     el('stats').textContent = 'server unreachable';
