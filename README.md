@@ -10,7 +10,7 @@ automatically, and the prompt, seed and model behind any tile are one click away
 
 ```
 SavePMTilesMap  ->  output/maps/<name>.pmtiles   (+ <name>.tiles.db)
-                    http://127.0.0.1:8188/pmtiles/
+                    http://127.0.0.1:8188/map/
 ```
 
 ## Install
@@ -22,7 +22,7 @@ pip install -r comfyui-pmtiles-map/requirements.txt     # pmtiles>=3.7
 ```
 
 Restart ComfyUI. The viewer is then served by ComfyUI itself at
-**`/pmtiles/`**, and the nodes appear under **`image/pmtiles`**.
+**`/map/`**, and the nodes appear under **`image/pmtiles`**.
 
 Requires Pillow (ComfyUI already depends on it) and `pmtiles` (pure python, ~30 KB).
 Developed against ComfyUI 0.30 / Python 3.13; nothing in it is version-specific.
@@ -108,7 +108,7 @@ For a large run:
    is still listed in the viewer, marked *not serialized yet*, with the build
    button ready;
 3. when the run is done, press **⛰ build** in the viewer — or
-   `POST /pmtiles/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
+   `POST /map/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
    followed by `--rebuild`.
 
 Measured over 20 saves of 16 leaves each: `archive_every` 0 → 20 rewrites
@@ -145,7 +145,7 @@ announced as soon as it is written, since that is when it becomes fetchable.
 
 ## Viewer
 
-`http://127.0.0.1:8188/pmtiles/` — or, with ComfyUI stopped:
+`http://127.0.0.1:8188/map/` — or, with ComfyUI stopped:
 
 ```bash
 python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
@@ -189,17 +189,17 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 
 | route | |
 |---|---|
-| `GET /pmtiles/maps` | archives in the maps dir, with zoom range and bounds |
-| `GET /pmtiles/{name}/meta.json` | header + whether a store is present |
-| `GET /pmtiles/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
-| `GET /pmtiles/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
-| `GET /pmtiles/{name}/render/{z}/{x}/{y}` | the original render, stitched; `?format=webp` |
-| `GET /pmtiles/{name}/search?q=` | title/tags/prompt, terms ANDed |
-| `POST /pmtiles/{name}/build` | recompose the pyramid and re-serialize, in a worker thread; `?pyramid=0` / `?archive=0` / `?min_zoom=` |
-| `GET /pmtiles/{name}/build` | that job's progress |
-| `GET /pmtiles/{name}/changes?since=` | which tiles changed since a sequence number |
-| `GET /pmtiles/{name}/events?since=` | the same feed as SSE |
-| `GET /pmtiles/{name}/file` | the raw archive, served with `Range` — point pmtiles.js or MapLibre at it |
+| `GET /map/maps` | archives in the maps dir, with zoom range and bounds |
+| `GET /map/{name}/meta.json` | header + whether a store is present |
+| `GET /map/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
+| `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
+| `GET /map/{name}/render/{z}/{x}/{y}` | the original render, stitched; `?format=webp` |
+| `GET /map/{name}/search?q=` | title/tags/prompt, terms ANDed |
+| `POST /map/{name}/build` | recompose the pyramid and re-serialize, in a worker thread; `?pyramid=0` / `?archive=0` / `?min_zoom=` |
+| `GET /map/{name}/build` | that job's progress |
+| `GET /map/{name}/changes?since=` | which tiles changed since a sequence number |
+| `GET /map/{name}/events?since=` | the same feed as SSE |
+| `GET /map/{name}/file` | the raw archive, served with `Range` — point pmtiles.js or MapLibre at it |
 
 ## CLI
 

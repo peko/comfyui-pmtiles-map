@@ -1,9 +1,9 @@
 /* Leaflet viewer over a PMTiles archive served tile-by-tile by routes.py.
  *
- * Tiles come from /pmtiles/<name>/tiles/{z}/{x}/{y}.webp, so this is an ordinary
+ * Tiles come from /map/<name>/tiles/{z}/{x}/{y}.webp, so this is an ordinary
  * XYZ layer -- the archive's internal layout is the server's problem.  The
  * per-tile metadata written by SavePMTilesMap rides along in the archive's own
- * metadata blob and arrives via /pmtiles/<name>/meta.json.
+ * metadata blob and arrives via /map/<name>/meta.json.
  */
 'use strict';
 
@@ -231,7 +231,7 @@ function showMap(info) {
   // for every tile, i.e. a full reload. Freshness comes from per-tile ETags,
   // and only the tiles the change feed names get refetched.
   state.layer = L.tileLayer(
-    `/pmtiles/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`
+    `/map/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`
     + `?source=${state.source}`,
     {
       tileSize,
@@ -301,7 +301,7 @@ function showMap(info) {
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
   state.seq = undefined;
-  fetch(`/pmtiles/${encodeURIComponent(info.name)}/changes`
+  fetch(`/map/${encodeURIComponent(info.name)}/changes`
     + (state.source === 'store' ? '?live=1' : ''))
     .then((res) => (res.ok ? res.json() : null))
     .then((payload) => {
@@ -352,7 +352,7 @@ function describe(coord, meta) {
   el('side-body').hidden = false;
   el('tile-coord').textContent = `${coord.z}/${coord.x}/${coord.y}`;
   el('tile-thumb').src =
-    `/pmtiles/${encodeURIComponent(state.name)}/tiles/${coord.z}/${coord.x}/${coord.y}.webp?v=${state.mtime}`;
+    `/map/${encodeURIComponent(state.name)}/tiles/${coord.z}/${coord.x}/${coord.y}.webp?v=${state.mtime}`;
 
   const dl = el('tile-fields');
   dl.textContent = '';
@@ -387,7 +387,7 @@ function describe(coord, meta) {
  *  a few-thousand-tile map and the sidebar only ever shows the tile you clicked. */
 async function fetchTileMeta(coord) {
   try {
-    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}`
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}`
       + `/tilemeta/${coord.z}/${coord.x}/${coord.y}`);
     if (!res.ok) return null;
     return (await res.json()).meta;
@@ -428,7 +428,7 @@ map.on('click', (ev) => {
 
 function openPreview(coord, meta) {
   if (!coord || !state.name) return;
-  const url = `/pmtiles/${encodeURIComponent(state.name)}`
+  const url = `/map/${encodeURIComponent(state.name)}`
     + `/render/${coord.z}/${coord.x}/${coord.y}`;
   const label = (meta && (meta.title || meta.prompt)) || `${coord.z}/${coord.x}/${coord.y}`;
   el('preview-caption').textContent = `${label} — loading…`;
@@ -655,7 +655,7 @@ async function runSearch() {
   const query = el('search-input').value.trim();
   if (!query || !state.name) { renderSearch(null, query); return; }
   try {
-    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}`
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}`
       + `/search?q=${encodeURIComponent(query)}`);
     renderSearch(res.ok ? await res.json() : null, query);
   } catch (err) {
@@ -890,7 +890,7 @@ el('saved-paste').addEventListener('click', async () => {
  * load for, typically, sixteen changed tiles. */
 
 function tileUrl(z, x, y) {
-  return `/pmtiles/${encodeURIComponent(state.name)}/tiles/${z}/${x}/${y}.webp`
+  return `/map/${encodeURIComponent(state.name)}/tiles/${z}/${x}/${y}.webp`
     + `?source=${state.source || 'auto'}`;
 }
 
@@ -995,7 +995,7 @@ function startFeed() {
   stopFeed();
   if (!state.name || !el('live-toggle').checked) return;
   const live = state.source === 'store' ? '&live=1' : '';
-  const url = `/pmtiles/${encodeURIComponent(state.name)}/events`
+  const url = `/map/${encodeURIComponent(state.name)}/events`
     + `?since=${state.seq === undefined ? '' : state.seq}${live}`;
   try {
     const feed = new EventSource(url);
@@ -1024,7 +1024,7 @@ function startFeed() {
 async function pollChanges() {
   if (!state.name || state.seq === undefined) return;
   try {
-    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}`
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}`
       + `/changes?since=${state.seq}`
       + (state.source === 'store' ? '&live=1' : ''));
     if (res.ok) applyChanges(await res.json());
@@ -1036,7 +1036,7 @@ async function pollChanges() {
 async function refreshMaps({ initial = false } = {}) {
   let maps = [];
   try {
-    const res = await fetch('/pmtiles/maps');
+    const res = await fetch('/map/maps');
     maps = (await res.json()).maps || [];
   } catch (err) {
     el('stats').textContent = 'server unreachable';
@@ -1150,7 +1150,7 @@ function reloadTiles() {
   // redraw() alone re-requests the same URLs, which a cache may answer; bump a
   // per-layer nonce so every request is new.
   state.reloadNonce = (state.reloadNonce || 0) + 1;
-  state.layer.setUrl(`/pmtiles/${encodeURIComponent(state.name)}`
+  state.layer.setUrl(`/map/${encodeURIComponent(state.name)}`
     + `/tiles/{z}/{x}/{y}.webp?r=${state.reloadNonce}`, false);
   pulse();
 }
@@ -1169,7 +1169,7 @@ async function buildMap() {
   state.building = true;
   button.disabled = true;
   try {
-    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}/build`,
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}/build`,
       { method: 'POST' });
     if (!res.ok) {
       setStats(state.meta);
@@ -1190,7 +1190,7 @@ async function pollBuild() {
   if (!state.name) return;
   let job = null;
   try {
-    const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}/build`);
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}/build`);
     job = res.ok ? await res.json() : null;
   } catch (err) { /* keep polling; the server may be busy encoding */ }
 

@@ -6,7 +6,7 @@ Hence `build_routes(maps_dir_fn)` rather than module-level decorators.
 
 Tiles are extracted from the archive *server-side*, so the browser fetches plain
 image URLs -- no client-side range reads, no pmtiles.js, and nothing to go wrong
-if a host mishandles `Range`.  `/pmtiles/{name}/file` still hands out the raw
+if a host mishandles `Range`.  `/map/{name}/file` still hands out the raw
 archive (via FileResponse, which aiohttp serves ranged) for anyone who wants to
 point MapLibre or pmtiles.js at it instead.
 """
@@ -108,11 +108,11 @@ def _archive_for(maps_dir, name):
 def build_routes(maps_dir_fn):
     routes = web.RouteTableDef()
 
-    @routes.get("/pmtiles")
+    @routes.get("/map")
     async def index_redirect(request):
-        raise web.HTTPFound("/pmtiles/")
+        raise web.HTTPFound("/map/")
 
-    @routes.get("/pmtiles/")
+    @routes.get("/map/")
     async def index(request):
         return web.FileResponse(
             os.path.join(WEB_DIR, "index.html"),
@@ -120,7 +120,7 @@ def build_routes(maps_dir_fn):
                      "Cache-Control": "no-cache"},
         )
 
-    @routes.get("/pmtiles/assets/{path:.*}")
+    @routes.get("/map/assets/{path:.*}")
     async def asset(request):
         rel = request.match_info["path"]
         full = os.path.realpath(os.path.join(WEB_DIR, rel))
@@ -131,11 +131,11 @@ def build_routes(maps_dir_fn):
                                    "application/octet-stream")
         return web.FileResponse(full, headers={"Content-Type": ctype})
 
-    @routes.get("/pmtiles/maps")
+    @routes.get("/map/maps")
     async def maps(request):
         return web.json_response({"maps": archive.list_archives(maps_dir_fn())})
 
-    @routes.get("/pmtiles/{name}/meta.json")
+    @routes.get("/map/{name}/meta.json")
     async def meta(request):
         name = request.match_info["name"]
         maps = maps_dir_fn()
@@ -157,7 +157,7 @@ def build_routes(maps_dir_fn):
             os.path.join(maps_dir_fn(), f"{name}.tiles.db"))
         return web.json_response(payload, headers={"Cache-Control": "no-cache"})
 
-    @routes.get("/pmtiles/{name}/tilemeta/{z}/{x}/{y}")
+    @routes.get("/map/{name}/tilemeta/{z}/{x}/{y}")
     async def tilemeta(request):
         name = request.match_info["name"]
         maps = maps_dir_fn()
@@ -183,7 +183,7 @@ def build_routes(maps_dir_fn):
                                   "meta": found},
                                  headers={"Cache-Control": "no-cache"})
 
-    @routes.get("/pmtiles/{name}/file")
+    @routes.get("/map/{name}/file")
     async def raw(request):
         path = _archive_for(maps_dir_fn(), request.match_info["name"])
         return web.FileResponse(path, headers={
@@ -192,7 +192,7 @@ def build_routes(maps_dir_fn):
             "Access-Control-Allow-Origin": "*",
         })
 
-    @routes.get("/pmtiles/{name}/tiles/{z}/{x}/{y}.webp")
+    @routes.get("/map/{name}/tiles/{z}/{x}/{y}.webp")
     async def tile(request):
         name = request.match_info["name"]
         maps = maps_dir_fn()
@@ -252,7 +252,7 @@ def build_routes(maps_dir_fn):
             return web.Response(status=304, headers=headers)
         return web.Response(body=data, headers=headers)
 
-    @routes.get("/pmtiles/{name}/render/{z}/{x}/{y}")
+    @routes.get("/map/{name}/render/{z}/{x}/{y}")
     async def render(request):
         """The original image a tile came from, stitched from its render block."""
         name = request.match_info["name"]
@@ -295,14 +295,14 @@ def build_routes(maps_dir_fn):
             "X-Render-Size": f"{image.width}x{image.height}",
         })
 
-    @routes.get("/pmtiles/{name}/build")
+    @routes.get("/map/{name}/build")
     async def build_status(request):
         # No archive check: a map being built for the first time has none yet.
         return web.json_response(_JOBS.get(request.match_info["name"])
                                  or {"state": "idle"},
                                  headers={"Cache-Control": "no-cache"})
 
-    @routes.post("/pmtiles/{name}/build")
+    @routes.post("/map/{name}/build")
     async def build(request):
         """Recompose the pyramid in one pass, then re-serialize the archive.
 
@@ -373,7 +373,7 @@ def build_routes(maps_dir_fn):
         return web.json_response({"started": True, "map": name,
                                   "pyramid": want_pyramid, "archive": want_archive})
 
-    @routes.get("/pmtiles/{name}/search")
+    @routes.get("/map/{name}/search")
     async def search(request):
         name = request.match_info["name"]
         _archive_for(maps_dir_fn(), name)
@@ -388,7 +388,7 @@ def build_routes(maps_dir_fn):
             found = {"results": [], "truncated": False}
         return web.json_response(found, headers={"Cache-Control": "no-cache"})
 
-    @routes.get("/pmtiles/{name}/changes")
+    @routes.get("/map/{name}/changes")
     async def changes(request):
         """Which tiles changed since `since`. Omit `since` to just get the seq."""
         name = request.match_info["name"]
@@ -407,7 +407,7 @@ def build_routes(maps_dir_fn):
                                   "truncated": truncated},
                                  headers={"Cache-Control": "no-cache"})
 
-    @routes.get("/pmtiles/{name}/events")
+    @routes.get("/map/{name}/events")
     async def events(request):
         """The same feed as a server-sent event stream."""
         name = request.match_info["name"]
@@ -464,6 +464,18 @@ def build_routes(maps_dir_fn):
             pass                            # the tab went away
         return response
 
+    # The viewer used to live under /pmtiles/. Temporary, not permanent: a 308
+    # would be cached hard by browsers and painful to undo.
+    @routes.get("/pmtiles")
+    async def legacy_root(request):
+        raise web.HTTPTemporaryRedirect("/map/")
+
+    @routes.get("/pmtiles/{tail:.*}")
+    async def legacy(request):
+        tail = request.match_info["tail"]
+        query = f"?{request.query_string}" if request.query_string else ""
+        raise web.HTTPTemporaryRedirect(f"/map/{tail}{query}")
+
     return routes
 
 
@@ -491,5 +503,5 @@ def register():
     # (ComfyUI/server.py:1279), and aiohttp resolves in registration order, so
     # these win over the static handler.
     instance.app.add_routes(build_routes(maps_dir))
-    print("[pmtiles-map] viewer at /pmtiles/")
+    print("[pmtiles-map] viewer at /map/")
     return True

@@ -52,7 +52,7 @@ def main():
     app = web.Application()
     app.add_routes(routes.build_routes(lambda: maps_dir))
     print(f"\nviewer: http://{'127.0.0.1' if args.listen == '0.0.0.0' else args.listen}"
-          f":{args.port}/pmtiles/")
+          f":{args.port}/map/")
     web.run_app(app, host=args.listen, port=args.port, print=None)
 
 
