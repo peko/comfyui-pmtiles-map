@@ -360,20 +360,78 @@ def stitch_render(db_path, archive_path, z, x, y, tile_size=None):
     return canvas, (z, ox, oy), (nx, ny), source
 
 
+def store_info(db_path):
+    """Describe a store that has no archive yet, in the same shape as archive_info.
+
+    A run with `write_archive` off (or a threshold not yet reached) has tiles in
+    the store and no .pmtiles at all. Leaving those maps out of the listing made
+    them invisible in the viewer -- and the build button with them, so the only
+    way out was the CLI.
+    """
+    extent = tilestore.read_extent(db_path)
+    if extent is None:
+        return None
+    west, north = tile_to_lonlat(extent["max_zoom"], extent["x0"], extent["y0"])
+    east, south = tile_to_lonlat(extent["max_zoom"],
+                                 extent["x1"] + 1, extent["y1"] + 1)
+    name = os.path.basename(db_path)[:-len(".tiles.db")]
+    return {
+        "name": name,
+        "file": None,
+        "built": False,
+        "min_zoom": extent["min_zoom"],
+        "max_zoom": extent["max_zoom"],
+        "tiles": extent["tiles"],
+        "unique_tiles": extent["tiles"],
+        "clustered": True,
+        "tile_type": "WEBP",
+        "tile_size": extent["tile_size"],
+        "bounds": [west, south, east, north],
+        "center": [(west + east) / 2, (south + north) / 2, extent["min_zoom"]],
+        "description": "",
+        "attribution": "",
+        "has_tile_metadata": False,
+        "has_store": True,
+        "pending_tiles": extent["pending_tiles"],
+        "pyramid_stale": extent["pyramid_stale"],
+        "bytes": os.path.getsize(db_path),
+        "mtime": os.stat(db_path).st_mtime,
+    }
+
+
 def list_archives(maps_dir):
     out = []
     if not os.path.isdir(maps_dir):
         return out
-    for entry in sorted(os.listdir(maps_dir)):
+    entries = sorted(os.listdir(maps_dir))
+    archived = set()
+    for entry in entries:
         if not entry.endswith(".pmtiles"):
             continue
         path = os.path.join(maps_dir, entry)
+        archived.add(entry[:-len(".pmtiles")])
         try:
-            out.append(archive_info(path))
+            info = archive_info(path)
+            info["built"] = True
+            out.append(info)
         except Exception as exc:                     # a half-written file, say
             out.append({
                 "name": os.path.splitext(entry)[0],
                 "file": entry,
                 "error": f"{type(exc).__name__}: {exc}",
             })
-    return out
+    # Stores with nothing serialized yet.
+    for entry in entries:
+        if not entry.endswith(".tiles.db"):
+            continue
+        name = entry[:-len(".tiles.db")]
+        if name in archived:
+            continue
+        try:
+            info = store_info(os.path.join(maps_dir, entry))
+        except Exception as exc:
+            info = {"name": name, "file": entry,
+                    "error": f"{type(exc).__name__}: {exc}"}
+        if info:
+            out.append(info)
+    return sorted(out, key=lambda m: m["name"])

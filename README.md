@@ -46,8 +46,8 @@ levels down to `pyramid_to_zoom`.
 | `webp_quality` | applied only when the archive is written; the store stays lossless |
 | `pyramid_to_zoom` | build derived levels down to this zoom (`0` = a single world tile) |
 | `y_scheme` | how to read the `y` input: `xyz` (y from the top, Leaflet/PMTiles) or `tms`. Tiles are always *stored* XYZ |
-| `write_archive` | re-serialize the `.pmtiles` after this save |
-| `archive_every` *(optional)* | batch that rewrite: serialize only once this many tiles are waiting. `0` = every save |
+| `write_archive` | whether the saver ever writes the `.pmtiles` at all. Off = manual only (the viewer's build button or the CLI) |
+| `archive_every` *(optional)* | when `write_archive` is on, how many tiles must be waiting before it rewrites. `0` = every save |
 | `embed_tile_metadata` | carry per-tile records inside the archive, so the single file is self-describing |
 | `store_full_prompt` | additionally keep the entire prompt graph per tile in the store |
 | `title`, `tags` | free text, shown in the viewer and searchable |
@@ -104,7 +104,9 @@ For a large run:
 
 1. set the saver's **`pyramid_to_zoom` equal to `z`** (nothing is recomposed);
 2. set **`archive_every`** to a few hundred tiles — or turn `write_archive` off
-   entirely for manual-only;
+   entirely for manual-only. A map with tiles in the store but no `.pmtiles` yet
+   is still listed in the viewer, marked *not serialized yet*, with the build
+   button ready;
 3. when the run is done, press **⛰ build** in the viewer — or
    `POST /pmtiles/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
    followed by `--rebuild`.

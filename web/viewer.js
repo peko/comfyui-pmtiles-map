@@ -184,6 +184,16 @@ function showMap(info) {
   // otherwise send it fetching tiles for the map we are leaving.
   if (state.layer) { state.layer.remove(); state.layer = null; }
 
+  // A store with no .pmtiles yet: there is nothing to serve tiles from, so do
+  // not add a layer that would 404 for every tile. Say so and offer the build.
+  if (info.built === false) {
+    state.floorZoom = floor;
+    setStats(info);
+    el('stats').textContent += ' · not serialized yet — press ⛰ build';
+    writeUrlState();
+    return;
+  }
+
   // Switching archives usually leaves the current zoom outside the new map's
   // range. Do it explicitly rather than letting Leaflet clamp: widen the limits
   // to the union first (so setView is not clipped by the map we are leaving),

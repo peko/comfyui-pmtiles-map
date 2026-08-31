@@ -239,6 +239,7 @@ def build_routes(maps_dir_fn):
 
     @routes.get("/pmtiles/{name}/build")
     async def build_status(request):
+        # No archive check: a map being built for the first time has none yet.
         return web.json_response(_JOBS.get(request.match_info["name"])
                                  or {"state": "idle"},
                                  headers={"Cache-Control": "no-cache"})
@@ -253,7 +254,13 @@ def build_routes(maps_dir_fn):
         """
         name = request.match_info["name"]
         maps = maps_dir_fn()
-        _archive_for(maps, name)
+        # The *store* is what a build needs; requiring the archive here made a map
+        # that has never been serialized (write_archive off from the first save)
+        # impossible to build from the viewer.
+        if not _SAFE_NAME.match(name or "") or name.startswith("."):
+            raise web.HTTPBadRequest(reason="bad map name")
+        if not os.path.isfile(os.path.join(maps, f"{name}.tiles.db")):
+            raise web.HTTPNotFound(reason=f"no store for {name}; nothing to build")
         job = _JOBS.get(name)
         if job and job.get("state") == "running":
             raise web.HTTPConflict(reason="a build is already running for this map")

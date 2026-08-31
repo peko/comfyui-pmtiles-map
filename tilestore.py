@@ -179,6 +179,42 @@ def search(db_path, query, limit=60):
     }
 
 
+def read_extent(db_path):
+    """Zoom range, tile count and the deepest level's x/y span, from SQL only.
+
+    Lets a store be described before it has ever been serialized -- which is the
+    state a run with `write_archive` off lives in, and which the viewer has to be
+    able to show, or the build button is unreachable.
+    """
+    db = _read_only(db_path)
+    if db is None:
+        return None
+    try:
+        minz, maxz, count = db.execute(
+            "SELECT MIN(z), MAX(z), COUNT(*) FROM tiles").fetchone()
+        if maxz is None:
+            return None
+        x0, x1, y0, y1 = db.execute(
+            "SELECT MIN(x), MAX(x), MIN(y), MAX(y) FROM tiles WHERE z = ?",
+            (maxz,)).fetchone()
+        size = db.execute("SELECT value FROM map_meta WHERE key='tile_size'").fetchone()
+        pending = db.execute(
+            "SELECT value FROM map_meta WHERE key='pending_tiles'").fetchone()
+        stale = db.execute(
+            "SELECT value FROM map_meta WHERE key='pyramid_stale'").fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+    return {
+        "min_zoom": int(minz), "max_zoom": int(maxz), "tiles": int(count),
+        "x0": int(x0), "x1": int(x1), "y0": int(y0), "y1": int(y1),
+        "tile_size": int(size[0]) if size else 256,
+        "pending_tiles": int(pending[0]) if pending and pending[0] else 0,
+        "pyramid_stale": (stale[0] == "1") if stale else (minz == maxz and count > 1),
+    }
+
+
 def read_tile_png(db_path, z, x, y):
     """One tile's stored PNG bytes, read-only. Lossless, unlike the archive."""
     db = _read_only(db_path)

@@ -476,6 +476,41 @@ def main():
           archive.archive_info(pmt)["pending_tiles"] == 7,
           str(archive.archive_info(pmt)["pending_tiles"]))
 
+    print("12. a store with no archive yet")
+    # `write_archive` off (or a threshold not yet reached) leaves tiles in the
+    # store and no .pmtiles at all. Such a map must still be listed and still be
+    # buildable, or the viewer cannot reach it and only the CLI can help.
+    only_db = os.path.join(args.out, "storeonly.tiles.db")
+    only_pmt = os.path.join(args.out, "storeonly.pmtiles")
+    for path in (only_pmt, *(only_db + s for s in ("", "-wal", "-shm"))):
+        if os.path.exists(path):
+            os.remove(path)
+    with tilestore.TileStore(only_db, ts) as st:
+        for i in range(4):
+            st.put_tile(3, i, 0, numbered_tile(ts, colour(i, 4), ""),
+                        meta={"kind": "leaf"})
+        st.bump_pending(4)
+        st.db.commit()
+    listed = {m["name"]: m for m in archive.list_archives(args.out)}
+    check("a store with no archive is listed", "storeonly" in listed)
+    entry = listed.get("storeonly", {})
+    check("and is marked unbuilt", entry.get("built") is False, str(entry.get("built")))
+    check("with its zoom range and tile count from the store",
+          (entry.get("min_zoom"), entry.get("max_zoom"), entry.get("tiles")) == (3, 3, 4),
+          f"{entry.get('min_zoom')}-{entry.get('max_zoom')}, {entry.get('tiles')}")
+    check("and its pending count", entry.get("pending_tiles") == 4,
+          str(entry.get("pending_tiles")))
+    check("bounds are a real envelope",
+          entry.get("bounds") and entry["bounds"][2] > entry["bounds"][0])
+    with tilestore.TileStore(only_db) as st:
+        archive.build_archive(st, only_pmt, name="storeonly")
+    after = {m["name"]: m for m in archive.list_archives(args.out)}["storeonly"]
+    check("once serialized it is built and owes nothing",
+          after.get("built") is True and after.get("pending_tiles") == 0,
+          f"built={after.get('built')} pending={after.get('pending_tiles')}")
+    check("and is listed once, not twice",
+          [m["name"] for m in archive.list_archives(args.out)].count("storeonly") == 1)
+
     print("12. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
