@@ -508,7 +508,32 @@ def main():
     check("the archive-gated feed withholds it", len(gated) == 1, f"{len(gated)} changes")
     check("the live feed announces it", len(live_seen) == 2, f"{len(live_seen)} changes")
 
-    print("13. a store with no archive yet")
+    print("13. static export index")
+    import importlib.util as _il
+    _spec = _il.spec_from_file_location("pmx", os.path.join(HERE, "pmtiles_export.py"))
+    pmx = _il.module_from_spec(_spec)
+    _spec.loader.exec_module(pmx)
+    synth_db = os.path.join(args.out, "synthetic.tiles.db")
+    # Expectation from the store itself, so this cannot drift with the fixture:
+    # one entry per render == one per leaf that is the origin of its block.
+    with tilestore.TileStore(synth_db) as st:
+        origins = sum(1 for _, _, _, m in
+                      st.db.execute("SELECT z, x, y, meta FROM tile_meta")
+                      for meta in [json.loads(m)]
+                      if meta.get("kind") == "leaf"
+                      and not (isinstance(meta.get("grid"), list)
+                               and (meta["grid"][0] or meta["grid"][1])))
+    idx = pmx.search_index(synth_db, pmt)
+    check("the sidecar has one entry per render, not per tile",
+          len(idx) == origins, f"{len(idx)} entries for {origins} renders")
+    check("entries carry coordinates and span",
+          all({"z", "x", "y", "nx", "ny"} <= set(e) for e in idx))
+    check("and the metadata a page can show",
+          any(e.get("prompt") for e in idx))
+    check("but never the whole graph",
+          not any("full_prompt" in e for e in idx))
+
+    print("14. a store with no archive yet")
     # `write_archive` off (or a threshold not yet reached) leaves tiles in the
     # store and no .pmtiles at all. Such a map must still be listed and still be
     # buildable, or the viewer cannot reach it and only the CLI can help.
@@ -543,7 +568,7 @@ def main():
     check("and is listed once, not twice",
           [m["name"] for m in archive.list_archives(args.out)].count("storeonly") == 1)
 
-    print("14. deferred pyramid")
+    print("15. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")

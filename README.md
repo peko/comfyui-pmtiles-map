@@ -248,6 +248,39 @@ On an RTX 4060 (8 GB), 1024² renders at 256 px tiles:
 | full-render preview, 1024² | 0.16 s |
 | per render, live feed | one event naming ~23 tiles |
 
+## Exporting for a CDN
+
+```bash
+python tools/pmtiles_export.py <map> ./out --build      # build, then bundle
+python tools/pmtiles_export.py <map> ./out --serve 8080 # and look at it first
+```
+
+The bundle is a directory you upload as-is — no server code:
+
+```
+out/  index.html  static.js  config.js  search.js
+      <map>.pmtiles          leaflet/   pmtiles/
+```
+
+`index.html` reads the archive **by HTTP range request** through the vendored
+`pmtiles.js`, so only the bytes on screen transfer. Verified end to end: a
+range-reading client pulled the header, the metadata and a real WebP tile with
+**6 requests totalling 5.3 KB out of a 531 KB archive**.
+
+Search still works because the index is baked at export time into `search.js`
+(one entry per render, not per tile — the sidecar for a 5463-tile map is ~160 KB
+raw, under 10 KB gzipped). It is a smaller client than the one ComfyUI serves:
+live updates, the build button and full-render previews all need a server and the
+store, and none of that survives the trip.
+
+Export refuses to run when the archive is behind the store or has no pyramid,
+naming which — uploading a half-serialized map is the mistake worth catching.
+`--build` fixes both first; `--force` exports anyway.
+
+**Do not check the bundle with `python -m http.server`** — it does not implement
+`Range`, so `pmtiles.js` gets the whole archive back for every request and the map
+stays blank. `--serve` runs a Range-capable one.
+
 ## Using an archive somewhere else
 
 The `.pmtiles` files are spec-conformant and `clustered`, with root directories
