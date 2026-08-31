@@ -125,6 +125,24 @@ ComfyUI) stay responsive. While the pyramid is missing the saver marks the map
 `pyramid_stale`, the viewer's build button lights up, and **zooming out is capped
 two levels below the deepest stored level** — see the note in the viewer section.
 
+## Two ways to read a map
+
+The same page serves both, picked automatically and switchable in the header:
+
+| source | reads | for |
+|---|---|---|
+| **store** (default when a `.tiles.db` exists) | SQLite, WebP straight from the encode cache | watching a run: a render is visible the moment it is saved, and the archive is never touched — which is what makes `archive_every` batching free of consequences |
+| **archive** | the `.pmtiles` itself | checking the file that will be uploaded |
+
+Store reads are also the faster of the two: **0.57 ms vs 3.04 ms** per tile
+(median of 300 interleaved requests over one keep-alive connection on a
+21846-tile map), because there is no directory to walk. Viewing during a run also
+warms the WebP cache that `build_archive` later reuses, so the final build costs
+less.
+
+In store mode the change feed drops its `archive_seq` ceiling — a tile is
+announced as soon as it is written, since that is when it becomes fetchable.
+
 ## Viewer
 
 `http://127.0.0.1:8188/pmtiles/` — or, with ComfyUI stopped:

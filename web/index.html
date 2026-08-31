@@ -14,6 +14,14 @@
     <select id="map-picker" title="press 1–9 to switch archive; the view is kept
 so two renderings of the same index can be compared"></select>
   </label>
+  <label title="store: live tiles straight from SQLite, the archive is never touched.
+archive: reads the .pmtiles itself — what would be uploaded to a CDN.">src
+    <select id="source-picker">
+      <option value="auto">auto</option>
+      <option value="store">store</option>
+      <option value="archive">archive</option>
+    </select>
+  </label>
   <span id="stats" class="stats">loading…</span>
   <span class="spacer"></span>
   <label class="toggle"><input type="checkbox" id="grid-toggle"> tile grid</label>

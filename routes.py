@@ -56,6 +56,41 @@ def _empty_tile():
     return _EMPTY
 
 
+def _pick_source(maps_dir, name, requested=None):
+    """Which backing store to read tiles from.
+
+    The live viewer reads the SQLite store, so a run never has to serialize the
+    archive just to be watched -- and it is faster besides (0.36 ms vs 2.11 ms
+    per tile, same bytes). The archive is for what will be uploaded: reading it
+    is how you check the file itself. Auto = store when there is one.
+    """
+    has_store = os.path.isfile(os.path.join(maps_dir, f"{name}.tiles.db"))
+    has_archive = os.path.isfile(os.path.join(maps_dir, f"{name}.pmtiles"))
+    if requested == "store" and has_store:
+        return "store"
+    if requested == "archive" and has_archive:
+        return "archive"
+    if requested in ("store", "archive"):
+        raise web.HTTPNotFound(reason=f"{name} has no {requested}")
+    if has_store:
+        return "store"
+    if has_archive:
+        return "archive"
+    raise web.HTTPNotFound(reason=f"no such map: {name}")
+
+
+def _store_tile(db_path, z, x, y, quality=80):
+    """Tile bytes from the store, encoding to WebP on first use."""
+    data, needs_encode = tilestore.read_tile_for_serving(db_path, z, x, y, quality)
+    if data is None:
+        return None
+    if not needs_encode:
+        return data
+    blob = archive.encode_webp(tilestore.open_png(data), quality=quality, method=4)
+    tilestore.write_webp_cache(db_path, z, x, y, blob, quality)
+    return blob
+
+
 def _archive_for(maps_dir, name):
     if not _SAFE_NAME.match(name or "") or name.startswith("."):
         raise web.HTTPBadRequest(reason="bad map name")
@@ -98,8 +133,18 @@ def build_routes(maps_dir_fn):
     @routes.get("/pmtiles/{name}/meta.json")
     async def meta(request):
         name = request.match_info["name"]
-        path = _archive_for(maps_dir_fn(), name)
+        maps = maps_dir_fn()
+        if not _SAFE_NAME.match(name or "") or name.startswith("."):
+            raise web.HTTPBadRequest(reason="bad map name")
+        path = os.path.join(maps, f"{name}.pmtiles")
+        if not os.path.isfile(path):
+            # Store-only: describable, servable, buildable -- see store_info.
+            payload = archive.store_info(os.path.join(maps, f"{name}.tiles.db"))
+            if payload is None:
+                raise web.HTTPNotFound(reason=f"no such map: {name}")
+            return web.json_response(payload, headers={"Cache-Control": "no-cache"})
         payload = archive.archive_info(path)
+        payload["built"] = True
         # Deliberately NOT the per-tile records: on a 5000-tile map that blob is
         # megabytes, and the viewer only ever needs the tile you clicked. Ask
         # /tilemeta/{z}/{x}/{y} for those.
@@ -144,15 +189,22 @@ def build_routes(maps_dir_fn):
 
     @routes.get("/pmtiles/{name}/tiles/{z}/{x}/{y}.webp")
     async def tile(request):
-        path = _archive_for(maps_dir_fn(), request.match_info["name"])
+        name = request.match_info["name"]
+        maps = maps_dir_fn()
+        if not _SAFE_NAME.match(name or "") or name.startswith("."):
+            raise web.HTTPBadRequest(reason="bad map name")
+        source = _pick_source(maps, name, request.query.get("source"))
         try:
             z = int(request.match_info["z"])
             x = int(request.match_info["x"])
             y = int(request.match_info["y"])
         except ValueError:
             raise web.HTTPBadRequest(reason="z/x/y must be integers")
-        handle = archive.open_archive(path)
-        data = handle.get(z, x, y)
+        if source == "store":
+            data = _store_tile(os.path.join(maps, f"{name}.tiles.db"), z, x, y)
+        else:
+            data = archive.open_archive(
+                os.path.join(maps, f"{name}.pmtiles")).get(z, x, y)
         if data is None:
             # A hole is served as a transparent tile with 200, not 404.
             #
@@ -189,6 +241,7 @@ def build_routes(maps_dir_fn):
             # immutable; revalidation is cheap and staleness is confusing.
             "Cache-Control": "no-cache",
             "ETag": etag,
+            "X-Tile-Source": source,
         }
         if request.headers.get("If-None-Match") == etag:
             return web.Response(status=304, headers=headers)
@@ -341,7 +394,8 @@ def build_routes(maps_dir_fn):
         except ValueError:
             raise web.HTTPBadRequest(reason="since must be an integer")
         seq, dirty, truncated = tilestore.read_changes(
-            os.path.join(maps_dir_fn(), f"{name}.tiles.db"), since)
+            os.path.join(maps_dir_fn(), f"{name}.tiles.db"), since,
+            live=request.query.get("live") == "1")
         if seq is None:
             raise web.HTTPNotFound(reason="no change feed for this map (no store)")
         return web.json_response({"seq": seq, "changes": dirty,
@@ -360,6 +414,7 @@ def build_routes(maps_dir_fn):
         except ValueError:
             raise web.HTTPBadRequest(reason="since must be an integer")
 
+        live = request.query.get("live") == "1"
         response = web.StreamResponse(headers={
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -367,14 +422,15 @@ def build_routes(maps_dir_fn):
             "X-Accel-Buffering": "no",      # in case anything proxies this
         })
         await response.prepare(request)
-        seq, _, _ = tilestore.read_changes(db_path, None)
+        seq, _, _ = tilestore.read_changes(db_path, None, live=live)
         if since is not None:
             seq = since
         idle = 0
         failures = 0
         try:
             while True:
-                new_seq, dirty, truncated = tilestore.read_changes(db_path, seq)
+                new_seq, dirty, truncated = tilestore.read_changes(
+                    db_path, seq, live=live)
                 if new_seq is None:
                     # Usually a transient lock while a batch is writing. Ending
                     # the stream here used to stop updates until the page was

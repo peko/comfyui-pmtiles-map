@@ -158,6 +158,20 @@ function tileAt(latlng, zoom) {
   return { z: zoom, x: Math.floor(p.x / TILE_PX), y: Math.floor(p.y / TILE_PX) };
 }
 
+/** Which backing store this map is being read from.
+ *
+ * `store` is the live source: tiles come straight out of SQLite, so a render is
+ * visible the moment it is saved and the archive is never touched -- which is
+ * what lets archive_every batch the .pmtiles writes without freezing the map.
+ * `archive` reads the .pmtiles itself, i.e. exactly what would be uploaded.
+ */
+function sourceFor(info) {
+  const want = state.ui.source || 'auto';
+  if (want === 'store' && info.has_store) return 'store';
+  if (want === 'archive' && info.built !== false) return 'archive';
+  return info.has_store ? 'store' : 'archive';
+}
+
 /** Map zoom - tile zoom, for an archive whose tiles are bigger than 256 px. */
 function zoomShift(tileSize) {
   return Math.max(0, Math.round(Math.log2((Number(tileSize) || 256) / TILE_PX)));
@@ -184,9 +198,10 @@ function showMap(info) {
   // otherwise send it fetching tiles for the map we are leaving.
   if (state.layer) { state.layer.remove(); state.layer = null; }
 
-  // A store with no .pmtiles yet: there is nothing to serve tiles from, so do
-  // not add a layer that would 404 for every tile. Say so and offer the build.
-  if (info.built === false) {
+  state.source = sourceFor(info);
+  // Only the archive source needs a .pmtiles. A store-only map is perfectly
+  // viewable live; it just has nothing to upload yet.
+  if (state.source === 'archive' && info.built === false) {
     state.floorZoom = floor;
     setStats(info);
     el('stats').textContent += ' · not serialized yet — press ⛰ build';
@@ -216,7 +231,8 @@ function showMap(info) {
   // for every tile, i.e. a full reload. Freshness comes from per-tile ETags,
   // and only the tiles the change feed names get refetched.
   state.layer = L.tileLayer(
-    `/pmtiles/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`,
+    `/pmtiles/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`
+    + `?source=${state.source}`,
     {
       tileSize,
       // Never let the map zoom far below the shallowest level the archive
@@ -256,7 +272,7 @@ function showMap(info) {
     state.dirty.delete(key);
     state.errored.delete(key);
     ev.tile.src = `${tileUrl(archiveZoom(ev.coords.z), ev.coords.x, ev.coords.y)}`
-      + `?t=${state.seq || 0}`;
+      + `&t=${state.seq || 0}`;
   });
 
   state.layer.on('tileerror', (ev) => {
@@ -285,7 +301,8 @@ function showMap(info) {
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
   state.seq = undefined;
-  fetch(`/pmtiles/${encodeURIComponent(info.name)}/changes`)
+  fetch(`/pmtiles/${encodeURIComponent(info.name)}/changes`
+    + (state.source === 'store' ? '?live=1' : ''))
     .then((res) => (res.ok ? res.json() : null))
     .then((payload) => {
       state.seq = payload ? payload.seq : 0;
@@ -304,6 +321,8 @@ function setStats(info) {
     + (info.pending_tiles ? ` · ${info.pending_tiles} tile(s) not in the archive` : '');
   el('build-map').classList.toggle('stale',
     !!info.pyramid_stale || !!info.pending_tiles);
+  el('stats').textContent += ` · ${state.source === 'store'
+    ? 'live from store' : 'from archive'}`;
 }
 
 /* ------------------------------------------------------------------ sidebar */
@@ -491,6 +510,13 @@ function setLeft(visible) {
   // the old width and the map goes grey down one side.
   map.invalidateSize({ animate: false });
 }
+
+el('source-picker').addEventListener('change', (ev) => {
+  state.ui.source = ev.target.value;
+  storeUi();
+  state.name = null;                 // force a full showMap with the new source
+  refreshMaps({ initial: true });
+});
 
 el('tab-search').addEventListener('click', () => setTab('search'));
 el('tab-saved').addEventListener('click', () => setTab('saved'));
@@ -864,7 +890,8 @@ el('saved-paste').addEventListener('click', async () => {
  * load for, typically, sixteen changed tiles. */
 
 function tileUrl(z, x, y) {
-  return `/pmtiles/${encodeURIComponent(state.name)}/tiles/${z}/${x}/${y}.webp`;
+  return `/pmtiles/${encodeURIComponent(state.name)}/tiles/${z}/${x}/${y}.webp`
+    + `?source=${state.source || 'auto'}`;
 }
 
 /* Leaflet keys its live tiles by the *map* zoom (GridLayer._tileCoordsToKey uses
@@ -898,7 +925,7 @@ function refreshTiles(changes, seq) {
     }
     // A one-off query param: the plain URL may sit in the memory cache, which
     // is not revalidated, so re-assigning the same src can be a no-op.
-    tile.el.src = `${tileUrl(z, x, y)}?t=${seq}`;
+    tile.el.src = `${tileUrl(z, x, y)}&t=${seq}`;
     flash(tile.el);
     touched += 1;
   }
@@ -932,7 +959,7 @@ function consumeDirty() {
     if (!tile || !tile.el) continue;
     const [x, y, z] = key.split(':').map(Number);
     state.dirty.delete(key);
-    tile.el.src = `${tileUrl(archiveZoom(z), x, y)}?t=${state.seq || 0}`;
+    tile.el.src = `${tileUrl(archiveZoom(z), x, y)}&t=${state.seq || 0}`;
     flash(tile.el);
   }
 }
@@ -967,8 +994,9 @@ function stopFeed() {
 function startFeed() {
   stopFeed();
   if (!state.name || !el('live-toggle').checked) return;
+  const live = state.source === 'store' ? '&live=1' : '';
   const url = `/pmtiles/${encodeURIComponent(state.name)}/events`
-    + (state.seq === undefined ? '' : `?since=${state.seq}`);
+    + `?since=${state.seq === undefined ? '' : state.seq}${live}`;
   try {
     const feed = new EventSource(url);
     feed.onmessage = (ev) => {
@@ -997,7 +1025,8 @@ async function pollChanges() {
   if (!state.name || state.seq === undefined) return;
   try {
     const res = await fetch(`/pmtiles/${encodeURIComponent(state.name)}`
-      + `/changes?since=${state.seq}`);
+      + `/changes?since=${state.seq}`
+      + (state.source === 'store' ? '&live=1' : ''));
     if (res.ok) applyChanges(await res.json());
   } catch (err) { /* the next tick will try again */ }
 }
@@ -1214,6 +1243,7 @@ try {
 } catch (err) {
   state.ui = {};
 }
+el('source-picker').value = state.ui.source || 'auto';
 setLeft(state.ui.left !== false);
 setTab(state.ui.tab === 'saved' ? 'saved' : 'search');
 state.saved = loadSaved();

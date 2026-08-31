@@ -476,7 +476,39 @@ def main():
           archive.archive_info(pmt)["pending_tiles"] == 7,
           str(archive.archive_info(pmt)["pending_tiles"]))
 
-    print("12. a store with no archive yet")
+    print("12. live source: the store, not the archive")
+    # The interactive viewer reads tiles from the store, so a run never has to
+    # serialize the archive just to be watched -- and the change feed must not be
+    # gated on archive_seq in that mode, or nothing would ever be announced.
+    live_db = os.path.join(args.out, "live.tiles.db")
+    live_pmt = os.path.join(args.out, "live.pmtiles")
+    for path in (live_pmt, *(live_db + sfx for sfx in ("", "-wal", "-shm"))):
+        if os.path.exists(path):
+            os.remove(path)
+    with tilestore.TileStore(live_db, ts) as st:
+        st.put_tile(3, 0, 0, numbered_tile(ts, (200, 80, 80), "a"), meta={"kind": "leaf"})
+        st.db.commit()
+        archive.build_archive(st, live_pmt, name="live")     # publishes seq
+        # a render that has NOT been serialized yet
+        st.put_tile(3, 1, 0, numbered_tile(ts, (80, 200, 120), "b"), meta={"kind": "leaf"})
+        st.db.commit()
+
+    data, needs_encode = tilestore.read_tile_for_serving(live_db, 3, 1, 0)
+    check("an unserialized tile is readable from the store", data is not None)
+    check("and needs encoding the first time", needs_encode is True)
+    blob = archive.encode_webp(tilestore.open_png(data), quality=80)
+    tilestore.write_webp_cache(live_db, 3, 1, 0, blob, 80)
+    again, again_encode = tilestore.read_tile_for_serving(live_db, 3, 1, 0)
+    check("second read comes from the cache", again_encode is False and again == blob)
+    check("that tile is absent from the archive",
+          archive.open_archive(live_pmt).get(3, 1, 0) is None)
+
+    _, gated, _ = tilestore.read_changes(live_db, 0, live=False)
+    _, live_seen, _ = tilestore.read_changes(live_db, 0, live=True)
+    check("the archive-gated feed withholds it", len(gated) == 1, f"{len(gated)} changes")
+    check("the live feed announces it", len(live_seen) == 2, f"{len(live_seen)} changes")
+
+    print("13. a store with no archive yet")
     # `write_archive` off (or a threshold not yet reached) leaves tiles in the
     # store and no .pmtiles at all. Such a map must still be listed and still be
     # buildable, or the viewer cannot reach it and only the CLI can help.
@@ -511,7 +543,7 @@ def main():
     check("and is listed once, not twice",
           [m["name"] for m in archive.list_archives(args.out)].count("storeonly") == 1)
 
-    print("12. deferred pyramid")
+    print("14. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")
