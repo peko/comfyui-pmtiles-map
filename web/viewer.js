@@ -193,6 +193,11 @@ function showMap(info) {
   state.ceilingZoom = ceiling;
   const [w, s, e, n] = info.bounds;
   const bounds = L.latLngBounds([[s, w], [n, e]]);
+  // Kept so the poll and the change feed can widen it: GridLayer._isValidTile
+  // refuses to REQUEST a tile outside options.bounds, and a run that grows the
+  // map past the extent it had at page load would otherwise be invisible until
+  // a reload -- renders landing, feed reporting them, no tile ever fetched.
+  state.boundsKey = info.bounds.join(',');
 
   // Drop the outgoing layer before touching the zoom: a clamp below would
   // otherwise send it fetching tiles for the map we are leaving.
@@ -916,10 +921,40 @@ function archiveZoom(mapZoom) {
 }
 
 /** Repaint the given tiles if they are on screen. */
+/** Widen the layer's tile bounds to include a tile, if it falls outside.
+ *
+ * The 3 s poll picks growth up too, but the feed knows the coordinate the
+ * instant it is written, and waiting a poll for the *first* tile of a new column
+ * is what makes a growing map look stuck.
+ */
+function includeTile(z, x, y) {
+  const layer = state.layer;
+  if (!layer) return false;
+  const current = layer.options.bounds;
+  // Same projection as blockBounds: TILE_PX is Leaflet's 256, never the
+  // archive's tile size -- a tile covers 1/2^z of the world whatever its pixels.
+  const tile = L.latLngBounds(
+    map.unproject(L.point(x * TILE_PX, y * TILE_PX), z),
+    map.unproject(L.point((x + 1) * TILE_PX, (y + 1) * TILE_PX), z),
+  );
+  if (current && current.contains(tile)) return false;
+  layer.options.bounds = current ? L.latLngBounds(current).extend(tile) : tile;
+  return true;
+}
+
 function refreshTiles(changes, seq) {
   const layer = state.layer;
   if (!layer || !layer._tiles) return 0;
   let touched = 0;
+  let widened = false;
+  for (const [z, x, y] of changes) {
+    if (includeTile(z, x, y)) widened = true;
+  }
+  if (widened) {
+    // Only creates the tiles that are now valid and missing; the ones already
+    // on screen are untouched, so this is not a redraw.
+    map.fire('moveend');
+  }
   for (const [z, x, y] of changes) {
     // Leaflet keys its live tiles "x:y:z" (GridLayer._tileCoordsToKey). Private,
     // but there is no public "refetch one tile", and redraw() is the whole layer.
@@ -1104,6 +1139,16 @@ async function refreshMaps({ initial = false } = {}) {
       state.layer.options.maxZoom = state.ceilingZoom;
       map.setMinZoom(state.floorZoom);
       map.setMaxZoom(state.ceilingZoom);
+    }
+    // A map grows sideways as well as deeper, and the layer's bounds are what
+    // decide whether a tile is even requested. Track the extent, or every render
+    // past the page-load extent stays invisible.
+    const key = (target.bounds || []).join(',');
+    if (key && key !== state.boundsKey) {
+      state.boundsKey = key;
+      const [bw, bs, be, bn] = target.bounds;
+      state.layer.options.bounds = L.latLngBounds([[bs, bw], [bn, be]]);
+      map.fire('moveend');
     }
     setStats(target);
     pulse();
