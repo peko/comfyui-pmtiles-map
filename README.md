@@ -134,7 +134,7 @@ The same page serves both, picked automatically and switchable in the header:
 | **store** (default when a `.tiles.db` exists) | SQLite, WebP straight from the encode cache | watching a run: a render is visible the moment it is saved, and the archive is never touched — which is what makes `archive_every` batching free of consequences |
 | **archive** | the `.pmtiles` itself | checking the file that will be uploaded |
 
-Store reads are also the faster of the two: **0.57 ms vs 3.04 ms** per tile
+Store reads are also the faster of the two: **0.35 ms vs 2.87 ms** per tile
 (median of 300 interleaved requests over one keep-alive connection on a
 21846-tile map), because there is no directory to walk. Viewing during a run also
 warms the WebP cache that `build_archive` later reuses, so the final build costs

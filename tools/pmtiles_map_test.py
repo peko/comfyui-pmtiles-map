@@ -530,7 +530,38 @@ def main():
     check("the archive-gated feed withholds it", len(gated) == 1, f"{len(gated)} changes")
     check("the live feed announces it", len(live_seen) == 2, f"{len(live_seen)} changes")
 
-    print("13. static export index")
+    print("13. cached read connections")
+    # Reads keep one connection per store, so a viewport of a hundred tiles does
+    # not reopen SQLite a hundred times (0.030 ms per read against 0.139, and p95
+    # 0.047 against 1.96). The hazard that buys is staleness, so the cache is
+    # keyed by inode: a store deleted and recreated must not keep serving the old
+    # one.
+    ident_db = os.path.join(args.out, "identity.tiles.db")
+    for sfx in ("", "-wal", "-shm"):
+        if os.path.exists(ident_db + sfx):
+            os.remove(ident_db + sfx)
+    with tilestore.TileStore(ident_db, ts) as st:
+        st.put_tile(3, 0, 0, numbered_tile(ts, (200, 40, 40), ""),
+                    meta={"kind": "leaf", "v": "first"})
+        st.db.commit()
+    check("a read works", (tilestore.read_meta(ident_db, 3, 0, 0) or {}).get("v") == "first")
+    for sfx in ("", "-wal", "-shm"):
+        if os.path.exists(ident_db + sfx):
+            os.remove(ident_db + sfx)
+    with tilestore.TileStore(ident_db, ts) as st:
+        st.put_tile(3, 0, 0, numbered_tile(ts, (40, 200, 40), ""),
+                    meta={"kind": "leaf", "v": "second"})
+        st.db.commit()
+    check("a recreated store is not served from the old connection",
+          (tilestore.read_meta(ident_db, 3, 0, 0) or {}).get("v") == "second",
+          str((tilestore.read_meta(ident_db, 3, 0, 0) or {}).get("v")))
+    for sfx in ("", "-wal", "-shm"):
+        if os.path.exists(ident_db + sfx):
+            os.remove(ident_db + sfx)
+    check("a deleted store reads as absent", tilestore.read_meta(ident_db, 3, 0, 0) is None)
+    tilestore.close_readers()
+
+    print("14. static export index")
     import importlib.util as _il
     _spec = _il.spec_from_file_location("pmx", os.path.join(HERE, "pmtiles_export.py"))
     pmx = _il.module_from_spec(_spec)
@@ -555,7 +586,7 @@ def main():
     check("but never the whole graph",
           not any("full_prompt" in e for e in idx))
 
-    print("14. a store with no archive yet")
+    print("15. a store with no archive yet")
     # `write_archive` off (or a threshold not yet reached) leaves tiles in the
     # store and no .pmtiles at all. Such a map must still be listed and still be
     # buildable, or the viewer cannot reach it and only the CLI can help.
@@ -590,7 +621,7 @@ def main():
     check("and is listed once, not twice",
           [m["name"] for m in archive.list_archives(args.out)].count("storeonly") == 1)
 
-    print("15. deferred pyramid")
+    print("16. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")
