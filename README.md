@@ -43,7 +43,9 @@ levels down to `pyramid_to_zoom`.
 | `placement` | `slice` cuts the render into a tile grid at native pixels (1024² at 256 px → 4×4 tiles, which is exactly one tile at `z-2`); `single_tile` resizes the whole render into one tile |
 | `coords_mode` | `manual` uses `x`/`y`; `auto_grid` takes the next free block, scanning in growing squares so re-queueing grows a compact map |
 | `tile_size` | 256 or 512. One tile size per map — the store refuses to mix |
-| `webp_quality` | applied only when the archive is written; independent of how the store keeps its tiles |
+| `webp_quality` | quality of the tiles written into the `.pmtiles`; independent of how the store keeps its own |
+| `store_format` | how tiles are kept in the store — `png` (default), `webp_lossless`, `webp_lossy`. See below |
+| `store_quality` | quality for `webp_lossy` only. Default 92 — this is the source of truth, so keep it above `webp_quality` |
 | `pyramid_to_zoom` | build derived levels down to this zoom (`0` = a single world tile) |
 | `y_scheme` | how to read the `y` input: `xyz` (y from the top, Leaflet/PMTiles) or `tms`. Tiles are always *stored* XYZ |
 | `write_archive` | whether the saver ever writes the `.pmtiles` at all. Off = manual only (the viewer's build button or the CLI) |
@@ -52,9 +54,7 @@ levels down to `pyramid_to_zoom`.
 | `store_full_prompt` | additionally keep the entire prompt graph per tile in the store |
 | `title`, `tags` | free text, shown in the viewer and searchable |
 | `preview` *(optional)* | the thumbnail the node shows in the graph, written to `ComfyUI/temp`: `thumbnail` (384 px WebP, ~42 KB, default), `full` (the whole render, ~2.8 MB), `off` (nothing) |
-| `prompt_text`, `negative_text` *(optional)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text` |
-| `store_format` *(optional)* | how tiles are kept in the store — `png` (default), `webp_lossless`, `webp_lossy`. See below |
-| `store_quality` *(optional)* | quality for `webp_lossy` only. Default 92 — this is the source of truth, so keep it above the archive's `webp_quality` |
+| `prompt_text`, `negative_text` *(optional)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text`. Single-line: the frontend's `addMultilineWidget` hardcodes `minNodeSize = [400, 200]` with no height option, so one multiline field would set the node's minimum size, and these are meant to be wired rather than typed |
 
 Outputs `images` (passthrough, so it can sit mid-chain) and `info` (what was
 placed where).

@@ -81,54 +81,9 @@ class SavePMTilesMap:
                                 "tooltip": "auto_grid ignores x/y and takes the next "
                                            "free block at zoom z"}),
                 "tile_size": (["256", "512"], {"default": "256"}),
-                "webp_quality": ("INT", {"default": 80, "min": 1, "max": 100}),
-                "pyramid_to_zoom": ("INT", {"default": 0, "min": 0, "max": MAX_ZOOM,
-                                    "tooltip": "build derived levels down to this zoom"}),
-                "y_scheme": (["xyz", "tms"], {"default": "xyz", "tooltip":
-                             "interpretation of the y input; tiles are always stored XYZ"}),
-                "write_archive": ("BOOLEAN", {"default": True, "tooltip":
-                                  "re-serialize the .pmtiles file after this save"}),
-                "embed_tile_metadata": ("BOOLEAN", {"default": True}),
-                "store_full_prompt": ("BOOLEAN", {"default": False, "tooltip":
-                                      "keep the whole graph per tile in the SQLite store"}),
-                "title": ("STRING", {"default": ""}),
-                "tags": ("STRING", {"default": ""}),
-            },
-            # Optional, not required: appending a *required* input would break
-            # every already-saved API prompt ("Required input is missing"), and
-            # optional inputs still render as widgets and can still be wired.
-            #
-            # Order within this block is grouped by subject -- the two write knobs
-            # first, then the metadata text -- but it cannot be merged with the
-            # `write_archive` group above: ComfyUI renders required inputs before
-            # optional ones, and `widgets_values` in a saved workflow is
-            # positional, so moving anything across that boundary would feed old
-            # graphs' values into the wrong fields.
-            "optional": {
-                "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
-                                  "tooltip": "batch the archive rewrite: serialize "
-                                             "only once at least this many tiles are "
-                                             "waiting. 0 = every save (fine for a "
-                                             "small map). The .pmtiles is rewritten "
-                                             "whole every time -- 135 MB per render on "
-                                             "a 20k-tile map -- while the store costs "
-                                             "~40 KB, so this is the knob that saves "
-                                             "the disk."}),
-                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
-                            "tooltip": "the image the node shows in the graph is a "
-                                       "file in ComfyUI/temp. `full` writes the whole "
-                                       "render (~2.8 MB each, measured); `thumbnail` "
-                                       "writes a 384 px WebP (~42 KB); `off` writes "
-                                       "nothing -- the map itself is the preview."}),
-                "prompt_text": ("STRING", {"default": "", "multiline": True,
-                                "tooltip": "the prompt to record, when the graph "
-                                           "builds it at runtime (FormattedString, "
-                                           "wildcards, a list selector) and it "
-                                           "therefore cannot be read off the graph. "
-                                           "Wire the same string that feeds "
-                                           "CLIPTextEncode.text here."}),
-                "negative_text": ("STRING", {"default": "", "multiline": True,
-                                  "tooltip": "same, for the negative prompt"}),
+                "webp_quality": ("INT", {"default": 80, "min": 1, "max": 100,
+                                 "tooltip": "quality of the tiles written into the "
+                                            ".pmtiles archive"}),
                 "store_format": (list(tilestore.STORE_FORMATS), {"default":
                                  tilestore.PNG, "tooltip":
                                  "how tiles are kept in the .tiles.db behind the "
@@ -145,6 +100,60 @@ class SavePMTilesMap:
                                              "only; ignored otherwise. This is the "
                                              "source of truth, so keep it well above "
                                              "the archive's webp_quality."}),
+                "pyramid_to_zoom": ("INT", {"default": 0, "min": 0, "max": MAX_ZOOM,
+                                    "tooltip": "build derived levels down to this zoom"}),
+                "y_scheme": (["xyz", "tms"], {"default": "xyz", "tooltip":
+                             "interpretation of the y input; tiles are always stored XYZ"}),
+                "write_archive": ("BOOLEAN", {"default": True, "tooltip":
+                                  "re-serialize the .pmtiles file after this save"}),
+                "embed_tile_metadata": ("BOOLEAN", {"default": True}),
+                "store_full_prompt": ("BOOLEAN", {"default": False, "tooltip":
+                                      "keep the whole graph per tile in the SQLite store"}),
+                "title": ("STRING", {"default": ""}),
+                "tags": ("STRING", {"default": ""}),
+            },
+            # Optional, not required: appending a *required* input would break
+            # every already-saved API prompt ("Required input is missing"), and
+            # optional inputs still render as widgets and can still be wired.
+            #
+            # Anything that belongs *beside* a required widget has to be required
+            # too: ComfyUI renders required inputs before optional ones, so an
+            # optional input can only ever land at the end of the node. That is
+            # why store_format/store_quality sit up with the image settings and
+            # not here. Moving an input across that boundary shifts every later
+            # value in a saved graph's positional `widgets_values` --
+            # tools/migrate_widgets.py rewrites them by name when it happens.
+            #
+            # prompt_text/negative_text are single-line on purpose: the frontend's
+            # addMultilineWidget hardcodes `minNodeSize = [400, 200]` and exposes
+            # no height option, so one multiline field sets the whole node's
+            # minimum size. Both are meant to be *wired* from whatever builds the
+            # string, and a wired widget draws no editor at all.
+            "optional": {
+                "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
+                                  "tooltip": "batch the archive rewrite: serialize "
+                                             "only once at least this many tiles are "
+                                             "waiting. 0 = every save (fine for a "
+                                             "small map). The .pmtiles is rewritten "
+                                             "whole every time -- 135 MB per render on "
+                                             "a 20k-tile map -- while the store costs "
+                                             "~40 KB, so this is the knob that saves "
+                                             "the disk."}),
+                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
+                            "tooltip": "the image the node shows in the graph is a "
+                                       "file in ComfyUI/temp. `full` writes the whole "
+                                       "render (~2.8 MB each, measured); `thumbnail` "
+                                       "writes a 384 px WebP (~42 KB); `off` writes "
+                                       "nothing -- the map itself is the preview."}),
+                "prompt_text": ("STRING", {"default": "", "multiline": False,
+                                "tooltip": "the prompt to record, when the graph "
+                                           "builds it at runtime (FormattedString, "
+                                           "wildcards, a list selector) and it "
+                                           "therefore cannot be read off the graph. "
+                                           "Wire the same string that feeds "
+                                           "CLIPTextEncode.text here."}),
+                "negative_text": ("STRING", {"default": "", "multiline": False,
+                                  "tooltip": "same, for the negative prompt"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -158,10 +167,9 @@ class SavePMTilesMap:
                    "z/x/y, rebuilding the coarser pyramid levels down to z=0.")
 
     def save(self, images, map_name, z, x, y, placement, coords_mode, tile_size,
-             webp_quality, pyramid_to_zoom, y_scheme, write_archive,
-             embed_tile_metadata, store_full_prompt, title, tags,
+             webp_quality, store_format, store_quality, pyramid_to_zoom, y_scheme,
+             write_archive, embed_tile_metadata, store_full_prompt, title, tags,
              archive_every=0, preview="thumbnail", prompt_text="", negative_text="",
-             store_format="", store_quality=0,
              prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
