@@ -301,8 +301,16 @@ function showMap(info) {
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
   state.seq = undefined;
-  fetch(`/map/${encodeURIComponent(info.name)}/changes`
-    + (state.source === 'store' ? '?live=1' : ''))
+  const watchable = state.source === 'store';
+  el('live-toggle').disabled = !watchable;
+  el('live-toggle').parentElement.title = watchable
+    ? 'refresh tiles as renders land'
+    : 'archive mode: the .pmtiles only changes when it is rebuilt';
+  if (!watchable) {
+    stopFeed();
+    return;
+  }
+  fetch(`/map/${encodeURIComponent(info.name)}/changes?live=1`)
     .then((res) => (res.ok ? res.json() : null))
     .then((payload) => {
       state.seq = payload ? payload.seq : 0;
@@ -994,9 +1002,11 @@ function stopFeed() {
 function startFeed() {
   stopFeed();
   if (!state.name || !el('live-toggle').checked) return;
-  const live = state.source === 'store' ? '&live=1' : '';
+  // Nothing to watch in archive mode: a .pmtiles only changes when someone
+  // rebuilds it, and that is what the 3 s map poll already notices.
+  if (state.source !== 'store') return;
   const url = `/map/${encodeURIComponent(state.name)}/events`
-    + `?since=${state.seq === undefined ? '' : state.seq}${live}`;
+    + `?since=${state.seq === undefined ? '' : state.seq}&live=1`;
   try {
     const feed = new EventSource(url);
     feed.onmessage = (ev) => {
@@ -1022,11 +1032,10 @@ function startFeed() {
 }
 
 async function pollChanges() {
-  if (!state.name || state.seq === undefined) return;
+  if (!state.name || state.seq === undefined || state.source !== 'store') return;
   try {
     const res = await fetch(`/map/${encodeURIComponent(state.name)}`
-      + `/changes?since=${state.seq}`
-      + (state.source === 'store' ? '&live=1' : ''));
+      + `/changes?since=${state.seq}&live=1`);
     if (res.ok) applyChanges(await res.json());
   } catch (err) { /* the next tick will try again */ }
 }

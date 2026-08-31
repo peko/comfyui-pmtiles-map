@@ -36,6 +36,7 @@ from PIL import Image   # noqa: E402
 import archive          # noqa: E402
 import paths            # noqa: E402
 import hilbert          # noqa: E402
+import routes            # noqa: E402
 import tilestore        # noqa: E402
 
 FAILED = []
@@ -658,6 +659,81 @@ def main():
         check("a deferred build clears the stale flag",
               st.get_map_meta("pyramid_stale") == "0",
               str(st.get_map_meta("pyramid_stale")))
+
+    print("17. the live path needs no archive")
+    # Regression: every endpoint the live viewer calls used to start with
+    # _archive_for(), so a map rendered with `write_archive` off -- the whole
+    # point of the store-backed source -- answered 404 to its own change feed.
+    # Only /file genuinely requires the .pmtiles.
+    import asyncio
+    from aiohttp import web as aioweb
+    from aiohttp.test_utils import TestClient, TestServer
+
+    live_db = os.path.join(args.out, "livewire.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(live_db + suffix):
+            os.remove(live_db + suffix)
+    with tilestore.TileStore(live_db, ts) as st:
+        st.put_tile(3, 1, 1, numbered_tile(ts, (40, 160, 220), "L"),
+                    meta={"kind": "leaf", "title": "wired", "tags": "live"})
+        st.bump_pending(1)
+        st.db.commit()
+    check("the test map has no archive",
+          not os.path.exists(os.path.join(args.out, "livewire.pmtiles")))
+
+    async def exercise():
+        app = aioweb.Application()
+        app.add_routes(routes.build_routes(lambda: args.out))
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            for label, url, want in (
+                    ("the map list", "/map/list", 200),
+                    ("meta.json", "/map/livewire/meta.json", 200),
+                    ("the change feed", "/map/livewire/changes?live=1", 200),
+                    ("search", "/map/livewire/search?q=wired", 200),
+                    ("per-tile metadata", "/map/livewire/tilemeta/3/1/1", 200),
+                    ("the render preview", "/map/livewire/render/3/1/1", 200),
+                    ("a tile", "/map/livewire/tiles/3/1/1.webp", 200),
+                    ("a hole, as a placeholder", "/map/livewire/tiles/3/0/0.webp", 200),
+                    ("but /file, which needs the archive", "/map/livewire/file", 404),
+                    ("and an unknown map", "/map/nope/changes", 404)):
+                res = await client.get(url)
+                await res.read()
+                check(f"store-only: {label} -> {want}", res.status == want,
+                      f"got {res.status} from {url}")
+
+            res = await client.get("/map/livewire/changes?live=1")
+            seq = (await res.json())["seq"]
+            stream = await client.get(f"/map/livewire/events?since={seq}&live=1")
+            check("store-only: the event stream opens", stream.status == 200,
+                  str(stream.status))
+            # Write while subscribed: the frame must carry that exact tile.
+            with tilestore.TileStore(live_db, ts) as st:
+                st.put_tile(3, 2, 1, numbered_tile(ts, (220, 80, 40), "N"),
+                            meta={"kind": "leaf"})
+                st.bump_pending(1)
+                st.db.commit()
+            frame = None
+            try:
+                async with asyncio.timeout(15):
+                    async for raw in stream.content:
+                        if raw.startswith(b"data:"):
+                            frame = json.loads(raw[5:])
+                            break
+            except (TimeoutError, asyncio.TimeoutError):
+                pass
+            stream.close()
+            check("store-only: a tile written live is announced",
+                  bool(frame) and [3, 2, 1] in frame.get("changes", []),
+                  json.dumps(frame)[:120] if frame else "no frame in 15 s")
+            check("store-only: the feed does not wait for an archive",
+                  bool(frame) and frame.get("seq", 0) > seq,
+                  f"seq {seq} -> {frame.get('seq') if frame else None}")
+        finally:
+            await client.close()
+
+    asyncio.new_event_loop().run_until_complete(exercise())
 
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):

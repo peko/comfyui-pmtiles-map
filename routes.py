@@ -96,6 +96,24 @@ def _store_tile(db_path, z, x, y):
     return blob
 
 
+def _require_map(maps_dir, name):
+    """404 only when a map exists in neither form; returns the archive path or None.
+
+    Everything except /file works off the store when there is one -- tiles,
+    metadata, search, the change feed, the render preview. Gating those on the
+    .pmtiles made a map with `write_archive` off answer 404 to its own live feed,
+    which is precisely the workflow the store-backed source exists for.
+    """
+    if not _SAFE_NAME.match(name or "") or name.startswith("."):
+        raise web.HTTPBadRequest(reason="bad map name")
+    pmt = os.path.join(maps_dir, f"{name}.pmtiles")
+    if os.path.isfile(pmt):
+        return pmt
+    if os.path.isfile(os.path.join(maps_dir, f"{name}.tiles.db")):
+        return None
+    raise web.HTTPNotFound(reason=f"no such map: {name}")
+
+
 def _archive_for(maps_dir, name):
     if not _SAFE_NAME.match(name or "") or name.startswith("."):
         raise web.HTTPBadRequest(reason="bad map name")
@@ -161,7 +179,7 @@ def build_routes(maps_dir_fn):
     async def tilemeta(request):
         name = request.match_info["name"]
         maps = maps_dir_fn()
-        path = _archive_for(maps, name)
+        path = _require_map(maps, name)
         try:
             z = int(request.match_info["z"])
             x = int(request.match_info["x"])
@@ -173,7 +191,7 @@ def build_routes(maps_dir_fn):
         # fallback, so a .pmtiles copied somewhere on its own still works.
         found = tilestore.read_meta(os.path.join(maps, f"{name}.tiles.db"), z, x, y)
         source = "store"
-        if found is None:
+        if found is None and path:
             found = archive.open_archive(path).metadata.get(
                 "tiles", {}).get(f"{z}/{x}/{y}")
             source = "archive"
@@ -257,7 +275,7 @@ def build_routes(maps_dir_fn):
         """The original image a tile came from, stitched from its render block."""
         name = request.match_info["name"]
         maps = maps_dir_fn()
-        path = _archive_for(maps, name)
+        path = _require_map(maps, name)
         try:
             z = int(request.match_info["z"])
             x = int(request.match_info["x"])
@@ -269,7 +287,8 @@ def build_routes(maps_dir_fn):
             raise web.HTTPBadRequest(reason="format must be png or webp")
 
         stitched = archive.stitch_render(
-            os.path.join(maps, f"{name}.tiles.db"), path, z, x, y)
+            os.path.join(maps, f"{name}.tiles.db"),
+            path or os.path.join(maps, f"{name}.pmtiles"), z, x, y)
         if stitched is None:
             raise web.HTTPNotFound(reason=f"nothing to stitch at {z}/{x}/{y}")
         image, origin, span, source = stitched
@@ -376,7 +395,7 @@ def build_routes(maps_dir_fn):
     @routes.get("/map/{name}/search")
     async def search(request):
         name = request.match_info["name"]
-        _archive_for(maps_dir_fn(), name)
+        _require_map(maps_dir_fn(), name)
         try:
             limit = min(int(request.query.get("limit", 60)), 500)
         except ValueError:
@@ -392,7 +411,7 @@ def build_routes(maps_dir_fn):
     async def changes(request):
         """Which tiles changed since `since`. Omit `since` to just get the seq."""
         name = request.match_info["name"]
-        _archive_for(maps_dir_fn(), name)
+        _require_map(maps_dir_fn(), name)
         raw = request.query.get("since")
         try:
             since = None if raw in (None, "") else int(raw)
@@ -411,7 +430,7 @@ def build_routes(maps_dir_fn):
     async def events(request):
         """The same feed as a server-sent event stream."""
         name = request.match_info["name"]
-        _archive_for(maps_dir_fn(), name)
+        _require_map(maps_dir_fn(), name)
         db_path = os.path.join(maps_dir_fn(), f"{name}.tiles.db")
         raw = request.query.get("since")
         try:
