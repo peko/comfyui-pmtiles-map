@@ -20,7 +20,10 @@ Writes a contact sheet per zoom level to --out so the pyramid can be *looked at*
 import argparse
 import json
 import os
+import random
 import re
+import shutil
+import sqlite3
 import struct
 import sys
 import time
@@ -734,6 +737,71 @@ def main():
             await client.close()
 
     asyncio.new_event_loop().run_until_complete(exercise())
+
+    print("18. the encode cache does not rewrite the tile")
+    # The cache used to be a column on `tiles`, beside the lossless PNG, and
+    # SQLite rewrites a row's overflow pages when any column changes -- so
+    # caching an 18 KB encode cost the whole 321 KB PNG, twice over WAL plus
+    # checkpoint. Measured as WAL growth, which is exactly what SQLite writes.
+    cache_db = os.path.join(args.out, "cache.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(cache_db + suffix):
+            os.remove(cache_db + suffix)
+    rnd = random.Random(11)
+    noisy = Image.new("RGB", (ts, ts))
+    noisy.putdata([(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256))
+                   for _ in range(ts * ts)])
+    blob = b"webp" + bytes(rnd.randrange(256) for _ in range(18 * 1024))
+    n = 24
+    with tilestore.TileStore(cache_db, ts) as st:
+        for i in range(n):
+            st.put_tile(3, i % 8, i // 8, noisy, meta={"kind": "leaf"})
+        st.db.commit()
+        st.db.execute("PRAGMA wal_autocheckpoint=0")
+        st.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        png_bytes_each = len(st.get_png(3, 0, 0))
+        base = os.path.getsize(cache_db + "-wal")
+        for i in range(n):
+            st.set_webp_cached(3, i % 8, i // 8, blob, 80)
+            st.db.commit()
+        grew = os.path.getsize(cache_db + "-wal") - base
+        check("caching an encode costs the encode, not the tile",
+              grew < 3 * n * len(blob),
+              f"{grew/1e6:.1f} MB for {n} x {len(blob)/1024:.0f} KB "
+              f"(PNG in the row is {png_bytes_each/1024:.0f} KB; "
+              f"{grew/n/1024:.0f} KB per tile)")
+        check("and it reads back", st.get_webp_cached(3, 0, 0, 80) == blob)
+        check("at that quality only", st.get_webp_cached(3, 0, 0, 60) is None)
+        st.put_tile(3, 0, 0, noisy, meta={"kind": "leaf"})
+        check("new pixels invalidate it",
+              st.get_webp_cached(3, 0, 0, 80) is None)
+        st.db.commit()
+
+    served, needs = tilestore.read_tile_for_serving(cache_db, 3, 1, 0)
+    check("serving uses the cache", served == blob and needs is False, str(needs))
+    tilestore.close_readers()
+
+    # A map last written before the move has its encodes in the old column and
+    # no tile_webp at all. Serving opens the store read-only, so it cannot
+    # create one -- it has to fall back rather than report a hole.
+    legacy_db = os.path.join(args.out, "legacy.tiles.db")
+    shutil.copyfile(cache_db, legacy_db)
+    legacy = sqlite3.connect(legacy_db)
+    legacy.execute("UPDATE tiles SET webp = ?, webp_q = 80 WHERE z=3 AND x=2 AND y=0",
+                   (blob,))
+    legacy.execute("DROP TABLE tile_webp")
+    legacy.commit()
+    legacy.close()
+    served, needs = tilestore.read_tile_for_serving(legacy_db, 3, 2, 0)
+    check("a pre-move store still serves its cache",
+          served == blob and needs is False, str(needs))
+    served, needs = tilestore.read_tile_for_serving(legacy_db, 3, 3, 0)
+    check("and an uncached tile there still asks for an encode",
+          served is not None and needs is True, str(needs))
+    with tilestore.TileStore(legacy_db) as st:
+        check("reopening it recreates the table and keeps the old cache",
+              st.get_webp_cached(3, 2, 0, 80) == blob)
+    tilestore.close_readers()
 
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):

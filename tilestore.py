@@ -38,11 +38,34 @@ CREATE TABLE IF NOT EXISTS tiles (
     h    INTEGER NOT NULL,
     kind TEXT    NOT NULL,
     mtime REAL   NOT NULL,
-    -- WebP encode cache. Re-serializing the archive re-encodes every tile
-    -- otherwise, which measured 7 s at 1000 tiles -- paid on every save, for
-    -- tiles that did not change. Invalidated by put_tile.
+    -- Legacy WebP cache, read-only now: see tile_webp below. Kept so an
+    -- existing map keeps its cache across the upgrade instead of re-encoding
+    -- every tile the first time it is served or serialized.
     webp   BLOB,
     webp_q INTEGER,
+    PRIMARY KEY (z, x, y)
+);
+-- WebP encode cache, deliberately NOT a column on `tiles`.
+--
+-- Re-serializing the archive would re-encode every tile otherwise (7 s at 1000
+-- tiles, paid on every save for tiles that did not change), so the encode is
+-- kept. But `tiles` rows carry the lossless PNG -- 321 KB on a real 512 px map
+-- against 18 KB for the encode -- and SQLite rewrites a row's overflow pages
+-- when any column changes. Caching an 18 KB blob into that row therefore cost
+-- the whole 321 KB, twice over WAL plus checkpoint. Measured on disk with
+-- autocheckpoint off, 256 tiles, 769 KB PNG + 73 KB WebP:
+--
+--     same row        429 MB   1637 KB/tile
+--     this table       22 MB     86 KB/tile
+--
+-- A separate table keeps the PNG untouched, so the cost is the blob and little
+-- else. Invalidated by put_tile, which replaces the pixels.
+CREATE TABLE IF NOT EXISTS tile_webp (
+    z    INTEGER NOT NULL,
+    x    INTEGER NOT NULL,
+    y    INTEGER NOT NULL,
+    blob BLOB    NOT NULL,
+    q    INTEGER NOT NULL,
     PRIMARY KEY (z, x, y)
 );
 CREATE INDEX IF NOT EXISTS tiles_z_kind ON tiles (z, kind);
@@ -257,14 +280,18 @@ def search(db_path, query, limit=60):
 def write_webp_cache(db_path, z, x, y, blob, quality):
     """Best-effort: keep an on-the-fly encode for next time.
 
-    Costs ~6 KB and makes the eventual archive build nearly free, since
-    build_archive reuses exactly this cache. A failure here is not worth
-    reporting -- the tile was already served.
+    Costs the blob itself and makes the eventual archive build nearly free,
+    since build_archive reuses exactly this cache. Goes to `tile_webp`, never
+    to a column on `tiles` -- writing it beside the PNG cost 19x as much disk
+    (see the schema comment). A failure here is not worth reporting: the tile
+    was already served.
     """
     try:
         db = sqlite3.connect(db_path, timeout=2.0)
-        db.execute("UPDATE tiles SET webp = ?, webp_q = ? WHERE z=? AND x=? AND y=?",
-                   (blob, int(quality), z, x, y))
+        db.execute("INSERT INTO tile_webp (z, x, y, blob, q) VALUES (?, ?, ?, ?, ?) "
+                   "ON CONFLICT(z, x, y) DO UPDATE SET blob = excluded.blob, "
+                   "q = excluded.q",
+                   (z, x, y, blob, int(quality)))
         db.commit()
         db.close()
     except sqlite3.Error:
@@ -290,15 +317,29 @@ def read_tile_for_serving(db_path, z, x, y):
             return None, False
         try:
             row = db.execute(
-                "SELECT webp, webp_q, png FROM tiles WHERE z=? AND x=? AND y=?",
-                (z, x, y)).fetchone()
+                "SELECT c.blob, t.webp, t.png FROM tiles t "
+                "LEFT JOIN tile_webp c ON c.z=t.z AND c.x=t.x AND c.y=t.y "
+                "WHERE t.z=? AND t.x=? AND t.y=?", (z, x, y)).fetchone()
+        except sqlite3.OperationalError:
+            # A store not opened for writing since the cache moved out of the
+            # row has no tile_webp yet, and this connection is read-only, so it
+            # cannot create one. Serve from the legacy column instead of
+            # turning every tile into a hole.
+            try:
+                row = db.execute(
+                    "SELECT NULL, webp, png FROM tiles WHERE z=? AND x=? AND y=?",
+                    (z, x, y)).fetchone()
+            except sqlite3.Error:
+                return None, False
         except sqlite3.Error:
             return None, False
     if row is None:
         return None, False
-    webp, _webp_q, png = row
-    if webp is not None:
-        return webp, False
+    cached, legacy, png = row
+    if cached is not None:
+        return cached, False
+    if legacy is not None:      # written before the cache moved out of the row
+        return legacy, False
     return png, True            # caller encodes; PNG is the lossless original
 
 
@@ -471,6 +512,9 @@ class TileStore:
             "mtime = excluded.mtime, webp = NULL, webp_q = NULL",
             (z, x, y, blob, img.width, img.height, kind, time.time()),
         )
+        # New pixels, so any encode of the old ones is wrong. The row's own
+        # legacy columns are cleared above; the cache table needs its own delete.
+        self.db.execute("DELETE FROM tile_webp WHERE z=? AND x=? AND y=?", (z, x, y))
         if meta is not None:
             self.db.execute(
                 "INSERT INTO tile_meta (z, x, y, meta) VALUES (?, ?, ?, ?) "
@@ -485,9 +529,21 @@ class TileStore:
     def delete_tile(self, z, x, y):
         self.db.execute("DELETE FROM tiles WHERE z=? AND x=? AND y=?", (z, x, y))
         self.db.execute("DELETE FROM tile_meta WHERE z=? AND x=? AND y=?", (z, x, y))
+        self.db.execute("DELETE FROM tile_webp WHERE z=? AND x=? AND y=?", (z, x, y))
 
     def get_webp_cached(self, z, x, y, quality):
-        """Encoded bytes for this tile at this quality, or None."""
+        """Encoded bytes for this tile at this quality, or None.
+
+        Falls back to the pre-move column so upgrading a map does not throw its
+        cache away -- a full re-encode of an existing store is minutes of CPU
+        for bytes that are already correct.
+        """
+        row = self.db.execute(
+            "SELECT blob FROM tile_webp WHERE z=? AND x=? AND y=? AND q = ?",
+            (z, x, y, int(quality)),
+        ).fetchone()
+        if row is not None:
+            return row[0]
         row = self.db.execute(
             "SELECT webp FROM tiles WHERE z=? AND x=? AND y=? AND webp_q = ?",
             (z, x, y, int(quality)),
@@ -496,8 +552,9 @@ class TileStore:
 
     def set_webp_cached(self, z, x, y, blob, quality):
         self.db.execute(
-            "UPDATE tiles SET webp = ?, webp_q = ? WHERE z=? AND x=? AND y=?",
-            (blob, int(quality), z, x, y),
+            "INSERT INTO tile_webp (z, x, y, blob, q) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(z, x, y) DO UPDATE SET blob = excluded.blob, q = excluded.q",
+            (z, x, y, blob, int(quality)),
         )
 
     def get_meta(self, z, x, y):
