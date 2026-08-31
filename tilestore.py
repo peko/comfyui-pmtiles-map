@@ -28,6 +28,16 @@ from PIL import Image
 LEAF = "leaf"
 DERIVED = "derived"
 
+_TILE_WEBP_DDL = """
+CREATE TABLE IF NOT EXISTS tile_webp (
+    z    INTEGER NOT NULL,
+    x    INTEGER NOT NULL,
+    y    INTEGER NOT NULL,
+    blob BLOB    NOT NULL,
+    q    INTEGER NOT NULL,
+    PRIMARY KEY (z, x, y)
+)"""
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tiles (
     z    INTEGER NOT NULL,
@@ -60,14 +70,7 @@ CREATE TABLE IF NOT EXISTS tiles (
 --
 -- A separate table keeps the PNG untouched, so the cost is the blob and little
 -- else. Invalidated by put_tile, which replaces the pixels.
-CREATE TABLE IF NOT EXISTS tile_webp (
-    z    INTEGER NOT NULL,
-    x    INTEGER NOT NULL,
-    y    INTEGER NOT NULL,
-    blob BLOB    NOT NULL,
-    q    INTEGER NOT NULL,
-    PRIMARY KEY (z, x, y)
-);
+-- (created from _TILE_WEBP_DDL, see below)
 CREATE INDEX IF NOT EXISTS tiles_z_kind ON tiles (z, kind);
 CREATE TABLE IF NOT EXISTS tile_meta (
     z    INTEGER NOT NULL,
@@ -96,13 +99,71 @@ CREATE TABLE IF NOT EXISTS tile_events (
 EVENT_LOG_LIMIT = 20000
 
 
-def png_bytes(img):
+# How a tile is kept in the store. The archive is always WebP at
+# `webp_quality`; this is about the source of truth behind it.
+#
+# Measured per tile on real 512 px renders, and on a 4x4 pyramid rebuilt from
+# one image (PSNR against the lossless pyramid, dB):
+#
+#     format         size    encode   z (leaf)   z-1    z-2
+#     png            341 KB   17 ms      --       --     --     the original default
+#     webp_lossless  238 KB   84 ms     inf      inf    inf     bit-identical
+#     webp_lossy q95  ~60 KB  ~20 ms   45.2     40.8   37.2
+#     webp_lossy q80  ~34 KB   16 ms   41.3     36.7   33.8
+#
+# **webp_lossless is free**: 25-30% smaller than PNG for pixels that come back
+# bit for bit, so nothing downstream can tell the difference. It is not the
+# default only because changing an existing map's format mid-run is the kind of
+# thing that should be asked for.
+#
+# The lossy loss compounds **per pyramid level, not per save**: a parent is
+# recomposed from its *children*, never from itself, so re-saving the same tile
+# five times is bit-identical to saving it once (verified) -- but each level down
+# encodes an already-encoded image, and that costs ~3.5 dB a level.
+PNG = "png"
+WEBP_LOSSLESS = "webp_lossless"
+WEBP_LOSSY = "webp_lossy"
+STORE_FORMATS = (PNG, WEBP_LOSSLESS, WEBP_LOSSY)
+
+
+def encode_tile(img, fmt=PNG, quality=92):
+    """Tile image -> bytes for the store, in the map's chosen format."""
     buf = io.BytesIO()
-    img.save(buf, format="PNG", compress_level=1)
+    if fmt == WEBP_LOSSLESS:
+        # method=1, swept against PNG compress_level=1 on real 512 px render
+        # tiles and on a synthetic flat-colour fixture:
+        #
+        #     m=0   72% / 32 ms   but 106% on the synthetic -- LARGER than PNG
+        #     m=1   67% / 84 ms        82%
+        #     m=4   63% / 124 ms       83%
+        #
+        # m=0 is the cheapest and the only one that can lose to PNG outright, so
+        # it is not a safe default for an option whose whole point is "smaller,
+        # same pixels". Past m=1 the extra 4% costs 40 ms a tile.
+        img.save(buf, format="WEBP", lossless=True, method=1)
+    elif fmt == WEBP_LOSSY:
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+        img.save(buf, format="WEBP", quality=int(quality), method=4)
+    else:
+        img.save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 
+def png_bytes(img):
+    """Back-compat alias: the lossless default."""
+    return encode_tile(img, PNG)
+
+
+def is_webp(blob):
+    """RIFF....WEBP -- so serving can pass stored bytes straight through."""
+    return len(blob) >= 12 and blob[:4] == b"RIFF" and blob[8:12] == b"WEBP"
+
+
 def open_png(blob):
+    """Decode a stored tile. Format-agnostic on purpose: Pillow sniffs the
+    signature, so a map whose `store_format` changed mid-run keeps working and
+    old PNG tiles stay readable beside new WebP ones."""
     img = Image.open(io.BytesIO(blob))
     img.load()
     return img
@@ -286,14 +347,26 @@ def write_webp_cache(db_path, z, x, y, blob, quality):
     (see the schema comment). A failure here is not worth reporting: the tile
     was already served.
     """
+    insert = ("INSERT INTO tile_webp (z, x, y, blob, q) VALUES (?, ?, ?, ?, ?) "
+              "ON CONFLICT(z, x, y) DO UPDATE SET blob = excluded.blob, "
+              "q = excluded.q")
     try:
         db = sqlite3.connect(db_path, timeout=2.0)
-        db.execute("INSERT INTO tile_webp (z, x, y, blob, q) VALUES (?, ?, ?, ?, ?) "
-                   "ON CONFLICT(z, x, y) DO UPDATE SET blob = excluded.blob, "
-                   "q = excluded.q",
-                   (z, x, y, blob, int(quality)))
-        db.commit()
-        db.close()
+        try:
+            try:
+                db.execute(insert, (z, x, y, blob, int(quality)))
+            except sqlite3.OperationalError:
+                # A map last written before the cache moved out of the row has
+                # no tile_webp yet, and serving is the first thing to touch it
+                # after an upgrade. Swallowing this would leave the cache empty
+                # forever -- every view re-encoding a tile it had already
+                # encoded -- so create the table here, where the connection is
+                # writable, and retry once.
+                db.execute(_TILE_WEBP_DDL)
+                db.execute(insert, (z, x, y, blob, int(quality)))
+            db.commit()
+        finally:
+            db.close()
     except sqlite3.Error:
         pass
 
@@ -335,12 +408,16 @@ def read_tile_for_serving(db_path, z, x, y):
             return None, False
     if row is None:
         return None, False
-    cached, legacy, png = row
+    cached, legacy, stored = row
     if cached is not None:
         return cached, False
     if legacy is not None:      # written before the cache moved out of the row
         return legacy, False
-    return png, True            # caller encodes; PNG is the lossless original
+    if is_webp(stored):
+        # A WebP-backed store needs no encode cache at all: the bytes on disk
+        # are already what the browser wants.
+        return stored, False
+    return stored, True         # caller encodes; the blob is the lossless PNG
 
 
 def read_extent(db_path):
@@ -425,7 +502,8 @@ def read_meta(db_path, z, x, y):
 class TileStore:
     """SQLite-backed tile pyramid.  One file per map."""
 
-    def __init__(self, db_path, tile_size=None):
+    def __init__(self, db_path, tile_size=None, store_format=None,
+                 store_quality=None):
         """`tile_size=None` adopts whatever the store was created with.
 
         Only a caller that *states* a size gets the mismatch guard -- that is the
@@ -437,10 +515,30 @@ class TileStore:
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.db = sqlite3.connect(db_path, timeout=60.0)
         self.db.executescript(_SCHEMA)
+        self.db.execute(_TILE_WEBP_DDL)
         self._migrate()
         # WAL so a reader (the standalone server, a test) never blocks a render.
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
+        # Unlike tile_size, the format may change mid-map: the decoder sniffs
+        # the signature, so old and new tiles coexist. A stated format wins and
+        # is remembered; otherwise adopt what the map already uses.
+        if store_format is None:
+            self.store_format = self.get_map_meta("store_format", PNG)
+            if self.store_format not in STORE_FORMATS:
+                self.store_format = PNG
+        else:
+            if store_format not in STORE_FORMATS:
+                raise ValueError(f"unknown store_format {store_format!r}; "
+                                 f"expected one of {', '.join(STORE_FORMATS)}")
+            self.store_format = store_format
+            self.set_map_meta("store_format", store_format)
+        if store_quality is None:
+            self.store_quality = int(self.get_map_meta("store_quality", 92))
+        else:
+            self.store_quality = int(store_quality)
+            self.set_map_meta("store_quality", self.store_quality)
+
         stored = self.get_map_meta("tile_size")
         if stored is None:
             self.tile_size = int(tile_size if tile_size is not None else 256)
@@ -503,7 +601,7 @@ class TileStore:
         """Store one tile image.  Replaces whatever was there."""
         if (1 << z) <= max(x, y) or min(x, y) < 0:
             raise ValueError(f"tile {z}/{x}/{y} is outside the z={z} extent")
-        blob = png_bytes(img)
+        blob = encode_tile(img, self.store_format, self.store_quality)
         self.db.execute(
             "INSERT INTO tiles (z, x, y, png, w, h, kind, mtime, webp, webp_q) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL) "

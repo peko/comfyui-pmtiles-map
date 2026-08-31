@@ -129,6 +129,22 @@ class SavePMTilesMap:
                                            "CLIPTextEncode.text here."}),
                 "negative_text": ("STRING", {"default": "", "multiline": True,
                                   "tooltip": "same, for the negative prompt"}),
+                "store_format": (list(tilestore.STORE_FORMATS), {"default":
+                                 tilestore.PNG, "tooltip":
+                                 "how tiles are kept in the .tiles.db behind the "
+                                 "archive. Measured on 512 px render tiles: png "
+                                 "341 KB (17 ms), webp_lossless 238 KB (84 ms) and "
+                                 "BIT-IDENTICAL, webp_lossy 34 KB at q80. Lossy "
+                                 "costs ~3.5 dB PSNR per pyramid level, because a "
+                                 "parent is recomposed from its children and so "
+                                 "encodes an already-encoded image; re-saving the "
+                                 "same tile does NOT add loss. webp_lossless is the "
+                                 "free win -- a third smaller for the same pixels."}),
+                "store_quality": ("INT", {"default": 92, "min": 1, "max": 100,
+                                  "tooltip": "quality for store_format=webp_lossy "
+                                             "only; ignored otherwise. This is the "
+                                             "source of truth, so keep it well above "
+                                             "the archive's webp_quality."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -145,6 +161,7 @@ class SavePMTilesMap:
              webp_quality, pyramid_to_zoom, y_scheme, write_archive,
              embed_tile_metadata, store_full_prompt, title, tags,
              archive_every=0, preview="thumbnail", prompt_text="", negative_text="",
+             store_format="", store_quality=0,
              prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
@@ -165,7 +182,9 @@ class SavePMTilesMap:
         if negative_text.strip():
             summary["negative"] = negative_text.strip()
 
-        with tilestore.TileStore(store_path(name), ts) as store:
+        with tilestore.TileStore(store_path(name), ts,
+                                 store_format=store_format or None,
+                                 store_quality=store_quality or None) as store:
             for index, image in enumerate(images):
                 pil = tensor_to_pil(image)
                 tiles, nx, ny, how = self._cut(pil, ts, placement)

@@ -803,6 +803,120 @@ def main():
               st.get_webp_cached(3, 2, 0, 80) == blob)
     tilestore.close_readers()
 
+    # Serving is what touches an upgraded map first, and it must be able to
+    # *fill* the cache, not just read it -- swallowing "no such table" there
+    # left every view re-encoding a tile it had already encoded.
+    fresh = os.path.join(args.out, "legacy2.tiles.db")
+    shutil.copyfile(cache_db, fresh)
+    con = sqlite3.connect(fresh)
+    con.execute("DROP TABLE tile_webp")
+    con.commit()
+    con.close()
+    served, needs = tilestore.read_tile_for_serving(fresh, 3, 4, 0)
+    check("a pre-move store reports its uncached tile", needs is True, str(needs))
+    tilestore.write_webp_cache(fresh, 3, 4, 0, blob, 80)
+    tilestore.close_readers()
+    served, needs = tilestore.read_tile_for_serving(fresh, 3, 4, 0)
+    check("and serving can create the cache table to fill it",
+          served == blob and needs is False, str(needs))
+    tilestore.close_readers()
+
+    print("19. store format is a choice, and lossless webp is a free one")
+    import numpy as np
+    fmt_src = Image.new("RGB", (ts, ts))
+    rnd = random.Random(5)
+    fmt_src.putdata([colour(rnd.randrange(64), 64) for _ in range(ts * ts)])
+    fmt_src = fmt_src.filter(__import__("PIL.ImageFilter", fromlist=["x"]).BoxBlur(2))
+    ref = np.asarray(fmt_src, dtype=np.int16)
+
+    sizes, pyramids = {}, {}
+    for fmt, q in ((tilestore.PNG, 92), (tilestore.WEBP_LOSSLESS, 92),
+                   (tilestore.WEBP_LOSSY, 92)):
+        db = os.path.join(args.out, f"fmt_{fmt}.tiles.db")
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(db + suffix):
+                os.remove(db + suffix)
+        with tilestore.TileStore(db, ts, store_format=fmt, store_quality=q) as st:
+            coords = []
+            for iy in range(2):
+                for ix in range(2):
+                    st.put_tile(1, ix, iy, fmt_src, meta={"kind": "leaf"})
+                    coords.append((1, ix, iy))
+            st.recompose_ancestors(coords, 0)
+            st.db.commit()
+            sizes[fmt] = len(st.get_png(1, 0, 0))
+            pyramids[fmt] = np.asarray(st.get_image(0, 0, 0).convert("RGB"),
+                                       dtype=np.int16)
+            check(f"{fmt}: a tile decodes back at the right size",
+                  st.get_image(1, 0, 0).size == (ts, ts))
+        served, needs = tilestore.read_tile_for_serving(db, 1, 0, 0)
+        want_encode = fmt == tilestore.PNG
+        check(f"{fmt}: serving {'needs' if want_encode else 'skips'} an encode",
+              needs is want_encode, str(needs))
+        with tilestore.TileStore(db) as st:      # no format stated
+            check(f"{fmt}: reopening adopts it", st.store_format == fmt,
+                  st.store_format)
+        tilestore.close_readers()
+
+    lossless_px = np.asarray(
+        tilestore.open_png(tilestore.encode_tile(fmt_src, tilestore.WEBP_LOSSLESS)
+                           ).convert("RGB"), dtype=np.int16)
+    check("webp_lossless really is lossless",
+          int(np.abs(lossless_px - ref).max()) == 0,
+          f"max channel delta {int(np.abs(lossless_px - ref).max())}")
+    check("and it is smaller than PNG",
+          sizes[tilestore.WEBP_LOSSLESS] < sizes[tilestore.PNG],
+          f"{sizes[tilestore.WEBP_LOSSLESS]/1024:.0f} KB vs "
+          f"{sizes[tilestore.PNG]/1024:.0f} KB")
+    check("so the derived pyramid is bit-identical too",
+          int(np.abs(pyramids[tilestore.WEBP_LOSSLESS]
+                     - pyramids[tilestore.PNG]).max()) == 0)
+    check("webp_lossy is much smaller and does lose",
+          sizes[tilestore.WEBP_LOSSY] < sizes[tilestore.WEBP_LOSSLESS] / 2
+          and int(np.abs(pyramids[tilestore.WEBP_LOSSY]
+                         - pyramids[tilestore.PNG]).max()) > 0,
+          f"{sizes[tilestore.WEBP_LOSSY]/1024:.0f} KB")
+
+    # A parent is recomposed from its children, never from itself, so saving the
+    # same tile again must not add another generation of loss.
+    again = os.path.join(args.out, "fmt_resave.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(again + suffix):
+            os.remove(again + suffix)
+    with tilestore.TileStore(again, ts, store_format=tilestore.WEBP_LOSSY,
+                             store_quality=92) as st:
+        for _ in range(5):
+            coords = []
+            for iy in range(2):
+                for ix in range(2):
+                    st.put_tile(1, ix, iy, fmt_src, meta={"kind": "leaf"})
+                    coords.append((1, ix, iy))
+            st.recompose_ancestors(coords, 0)
+        st.db.commit()
+        five = np.asarray(st.get_image(0, 0, 0).convert("RGB"), dtype=np.int16)
+    check("re-saving a lossy tile adds no further loss",
+          int(np.abs(five - pyramids[tilestore.WEBP_LOSSY]).max()) == 0,
+          f"max delta {int(np.abs(five - pyramids[tilestore.WEBP_LOSSY]).max())}")
+
+    mixed = os.path.join(args.out, "fmt_mixed.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(mixed + suffix):
+            os.remove(mixed + suffix)
+    with tilestore.TileStore(mixed, ts, store_format=tilestore.PNG) as st:
+        st.put_tile(1, 0, 0, fmt_src, meta={"kind": "leaf"})
+        st.db.commit()
+    with tilestore.TileStore(mixed, ts, store_format=tilestore.WEBP_LOSSLESS) as st:
+        st.put_tile(1, 1, 0, fmt_src, meta={"kind": "leaf"})
+        st.db.commit()
+        check("formats may be mixed in one map -- the decoder sniffs",
+              st.get_image(1, 0, 0).size == (ts, ts)
+              and st.get_image(1, 1, 0).size == (ts, ts))
+    try:
+        tilestore.TileStore(mixed, ts, store_format="jpeg2000").close()
+        check("an unknown format is refused", False, "no error raised")
+    except ValueError:
+        check("an unknown format is refused", True)
+
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):
             bench(args.out, n, ts, args.quality)

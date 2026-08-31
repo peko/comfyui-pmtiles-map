@@ -43,7 +43,7 @@ levels down to `pyramid_to_zoom`.
 | `placement` | `slice` cuts the render into a tile grid at native pixels (1024² at 256 px → 4×4 tiles, which is exactly one tile at `z-2`); `single_tile` resizes the whole render into one tile |
 | `coords_mode` | `manual` uses `x`/`y`; `auto_grid` takes the next free block, scanning in growing squares so re-queueing grows a compact map |
 | `tile_size` | 256 or 512. One tile size per map — the store refuses to mix |
-| `webp_quality` | applied only when the archive is written; the store stays lossless |
+| `webp_quality` | applied only when the archive is written; independent of how the store keeps its tiles |
 | `pyramid_to_zoom` | build derived levels down to this zoom (`0` = a single world tile) |
 | `y_scheme` | how to read the `y` input: `xyz` (y from the top, Leaflet/PMTiles) or `tms`. Tiles are always *stored* XYZ |
 | `write_archive` | whether the saver ever writes the `.pmtiles` at all. Off = manual only (the viewer's build button or the CLI) |
@@ -53,9 +53,44 @@ levels down to `pyramid_to_zoom`.
 | `title`, `tags` | free text, shown in the viewer and searchable |
 | `preview` *(optional)* | the thumbnail the node shows in the graph, written to `ComfyUI/temp`: `thumbnail` (384 px WebP, ~42 KB, default), `full` (the whole render, ~2.8 MB), `off` (nothing) |
 | `prompt_text`, `negative_text` *(optional)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text` |
+| `store_format` *(optional)* | how tiles are kept in the store — `png` (default), `webp_lossless`, `webp_lossy`. See below |
+| `store_quality` *(optional)* | quality for `webp_lossy` only. Default 92 — this is the source of truth, so keep it above the archive's `webp_quality` |
 
 Outputs `images` (passthrough, so it can sit mid-chain) and `info` (what was
 placed where).
+
+### How tiles are kept in the store
+
+The archive is always WebP at `webp_quality`. `store_format` is about the
+**source of truth** behind it, and it matters because a big map is mostly store:
+341 KB a tile x 65536 tiles is 22 GB.
+
+Measured on real 512 px render tiles, and on a 4x4 pyramid rebuilt from one
+image (PSNR against the lossless pyramid):
+
+| `store_format` | per tile | encode | leaf | z-1 | z-2 |
+|---|---|---|---|---|---|
+| `png` (default) | 341 KB | 17 ms | — | — | — |
+| `webp_lossless` | **238 KB** | 84 ms | **inf** | **inf** | **inf** |
+| `webp_lossy` q95 | ~60 KB | ~20 ms | 45.2 dB | 40.8 | 37.2 |
+| `webp_lossy` q80 | ~34 KB | 16 ms | 41.3 dB | 36.7 | 33.8 |
+
+**`webp_lossless` is the free one** — a third smaller for pixels that come back
+bit for bit, verified against the source array and against the derived pyramid.
+It is not the default only because switching an existing map's format is
+something to ask for rather than inherit. It also removes the encode cache from
+the picture entirely: WebP in the store is already what a browser wants, so
+serving passes the stored bytes straight through.
+
+The lossy loss compounds **per pyramid level, not per save**. A parent is
+recomposed from its *children*, never from itself, so re-saving the same tile
+five times is bit-identical to saving it once (asserted in the tests) — but each
+level down encodes an already-encoded image, and that costs ~3.5 dB a level. If
+you want `webp_lossy` and depth, set `pyramid_to_zoom == z` while rendering and
+build the pyramid once at the end, from leaves that have only been encoded once.
+
+Formats may be mixed within one map: the decoder sniffs the signature, so
+changing `store_format` mid-run leaves the older tiles readable.
 
 Recorded per tile: prompt, negative, seed, steps, cfg, sampler, scheduler,
 denoise, model files, latent size, timestamp, title and tags.
