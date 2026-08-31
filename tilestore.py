@@ -358,9 +358,19 @@ class TileStore:
         row = self.db.execute("SELECT MAX(seq) FROM tile_events").fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
+    def bump_pending(self, n):
+        """Count tiles written since the archive was last serialized."""
+        total = int(self.get_map_meta("pending_tiles", "0") or 0) + int(n)
+        self.set_map_meta("pending_tiles", total)
+        return total
+
+    def pending_tiles(self):
+        return int(self.get_map_meta("pending_tiles", "0") or 0)
+
     def mark_archived(self, seq=None):
         """Record which changes the .pmtiles now contains, and trim the log."""
         self.set_map_meta("archive_seq", self.current_seq() if seq is None else seq)
+        self.set_map_meta("pending_tiles", 0)
         self.db.execute(
             "DELETE FROM tile_events WHERE seq <= "
             "(SELECT MAX(seq) - ? FROM tile_events)", (EVENT_LOG_LIMIT,)

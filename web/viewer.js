@@ -290,8 +290,10 @@ function setStats(info) {
     + `${info.tile_size || 256}px · ${fmtBytes(info.bytes)}`
     + (info.has_tile_metadata || info.has_store ? '' : ' · no per-tile metadata')
     + (info.pyramid_stale
-      ? ` · no pyramid, zoom-out capped at z${state.floorZoom}` : '');
-  el('build-map').classList.toggle('stale', !!info.pyramid_stale);
+      ? ` · no pyramid, zoom-out capped at z${state.floorZoom}` : '')
+    + (info.pending_tiles ? ` · ${info.pending_tiles} tile(s) not in the archive` : '');
+  el('build-map').classList.toggle('stale',
+    !!info.pyramid_stale || !!info.pending_tiles);
 }
 
 /* ------------------------------------------------------------------ sidebar */

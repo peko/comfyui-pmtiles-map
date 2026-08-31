@@ -107,6 +107,15 @@ class SavePMTilesMap:
                                            "CLIPTextEncode.text here."}),
                 "negative_text": ("STRING", {"default": "", "multiline": True,
                                   "tooltip": "same, for the negative prompt"}),
+                "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
+                                  "tooltip": "batch the archive rewrite: serialize "
+                                             "only once at least this many tiles are "
+                                             "waiting. 0 = every save (fine for a "
+                                             "small map). The .pmtiles is rewritten "
+                                             "whole every time -- 135 MB per render on "
+                                             "a 20k-tile map -- while the store costs "
+                                             "~40 KB, so this is the knob that saves "
+                                             "the disk."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -122,7 +131,8 @@ class SavePMTilesMap:
     def save(self, images, map_name, z, x, y, placement, coords_mode, tile_size,
              webp_quality, pyramid_to_zoom, y_scheme, write_archive,
              embed_tile_metadata, store_full_prompt, title, tags,
-             prompt_text="", negative_text="", prompt=None, extra_pnginfo=None):
+             prompt_text="", negative_text="", archive_every=0,
+             prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
         pyramid_to_zoom = min(int(pyramid_to_zoom), int(z))
@@ -196,10 +206,19 @@ class SavePMTilesMap:
             else:
                 lines.append(f"pyramid: {len(derived)} derived tile(s) down to "
                              f"z={pyramid_to_zoom}")
+            pending = store.bump_pending(len(placed) + len(derived))
             store.db.commit()
             stats = store.stats()
 
-            if write_archive:
+            # The store costs ~40 KB of writes per save regardless of map size
+            # (SQLite writes changed pages), but the archive is rewritten *whole*
+            # -- 135 MB per render on a 20k-tile map. So batch that one.
+            threshold = max(0, int(archive_every))
+            due = threshold == 0 or pending >= threshold
+            if write_archive and not due:
+                lines.append(f"archive: deferred, {pending} tile(s) pending "
+                             f"(archive_every={threshold})")
+            if write_archive and due:
                 info = archive.build_archive(
                     store, archive_path(name),
                     webp_quality=webp_quality,
@@ -213,9 +232,9 @@ class SavePMTilesMap:
                         mb=info["file_bytes"] / 1e6, minz=info["min_zoom"],
                         maxz=info["max_zoom"], secs=info["seconds"])
                 )
-            else:
-                lines.append(f"archive: not rebuilt (store holds {stats['tiles']} "
-                             f"tiles); run tools/pmtiles_map.py --rebuild")
+            elif not write_archive:
+                lines.append(f"archive: off, {pending} tile(s) pending of "
+                             f"{stats['tiles']} in the store — build from the viewer")
 
         text = "\n".join(lines)
         print(f"[pmtiles-map] {name}\n  " + "\n  ".join(lines))

@@ -296,6 +296,10 @@ def archive_info(path):
         # skipped for size, so the viewer must not report "no metadata" on the
         # strength of the archive alone.
         "has_store": os.path.isfile(f"{os.path.splitext(path)[0]}.tiles.db"),
+        # Tiles in the store that this archive does not contain yet, because the
+        # saver is batching archive writes (see archive_every).
+        "pending_tiles": int(tilestore.read_map_meta(
+            f"{os.path.splitext(path)[0]}.tiles.db", "pending_tiles", "0") or 0),
         # The flag is set by a saver that skipped the pyramid, but maps written
         # before it existed have no flag -- and a map whose every tile sits on one
         # level has no pyramid whatever the flag says.

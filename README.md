@@ -46,7 +46,8 @@ levels down to `pyramid_to_zoom`.
 | `webp_quality` | applied only when the archive is written; the store stays lossless |
 | `pyramid_to_zoom` | build derived levels down to this zoom (`0` = a single world tile) |
 | `y_scheme` | how to read the `y` input: `xyz` (y from the top, Leaflet/PMTiles) or `tms`. Tiles are always *stored* XYZ |
-| `write_archive` | re-serialize the `.pmtiles` after this save; turn off for a big map and rebuild once from the CLI |
+| `write_archive` | re-serialize the `.pmtiles` after this save |
+| `archive_every` *(optional)* | batch that rewrite: serialize only once this many tiles are waiting. `0` = every save |
 | `embed_tile_metadata` | carry per-tile records inside the archive, so the single file is self-describing |
 | `store_full_prompt` | additionally keep the entire prompt graph per tile in the store |
 | `title`, `tags` | free text, shown in the viewer and searchable |
@@ -83,13 +84,37 @@ at z=4: **1024 recompositions and 4.2 s**, against **85 and 0.6 s** for one
 bottom-up pass at the end. The archive rewrite is worse: it is O(whole map) per
 save, so a 135 MB archive over 1000 renders writes ~135 GB.
 
+### The two costs are not comparable
+
+Measured with distinct tiles (identical ones are deduplicated by hash and cost
+almost nothing):
+
+| | one save | scales with |
+|---|---|---|
+| store (SQLite) | **~40 KB** of WAL, 0.1 s | changed pages, *not* file size — 40 KB at 4 MB, 44 KB at 35 MB |
+| archive (`.pmtiles`) | **the whole file** — 22 MB at 2k tiles, 135 MB at 20k | the map |
+
+So the GB-sized `.tiles.db` files next to your archives are *not* rewritten per
+tile; only the archive is. That makes `archive_every` the one knob that matters
+for disk wear.
+
 For a large run:
 
-1. set the saver's **`pyramid_to_zoom` equal to `z`** (nothing is recomposed) and
-   **`write_archive` off** (nothing is re-serialized);
-2. when the run is done, press **⛰ build** in the viewer — or
+1. set the saver's **`pyramid_to_zoom` equal to `z`** (nothing is recomposed);
+2. set **`archive_every`** to a few hundred tiles — or turn `write_archive` off
+   entirely for manual-only;
+3. when the run is done, press **⛰ build** in the viewer — or
    `POST /pmtiles/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
    followed by `--rebuild`.
+
+Measured over 20 saves of 16 leaves each: `archive_every` 0 → 20 rewrites
+(3.5 MB), 50 → 10 rewrites (1.8 MB), 200 → 2 rewrites (0.3 MB). The viewer shows
+how many tiles are waiting, and the build button lights up.
+
+**What batching costs you:** tiles are served *from the archive*, and the change
+feed only publishes what the archive already holds, so live updates lag by up to
+`archive_every` tiles. Nothing is lost — the store has every tile — but the map
+stops moving in real time.
 
 The build runs in a worker thread with progress, so the viewer (and a running
 ComfyUI) stay responsive. While the pyramid is missing the saver marks the map

@@ -446,7 +446,37 @@ def main():
         check("a brand new store still defaults to 256", st.tile_size == 256,
               f"got {st.tile_size}")
 
-    print("11. deferred pyramid")
+    print("11. batching the archive rewrite")
+    # The store costs ~40 KB per save whatever its size (SQLite writes changed
+    # pages); the archive is rewritten whole. So the archive is the one to batch.
+    batch_db = os.path.join(args.out, "batch.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(batch_db + suffix):
+            os.remove(batch_db + suffix)
+    with tilestore.TileStore(batch_db, ts) as st:
+        check("a fresh store owes nothing", st.pending_tiles() == 0)
+        st.put_tile(4, 0, 0, numbered_tile(ts, (80, 160, 80), ""), meta={"kind": "leaf"})
+        st.bump_pending(1)
+        st.bump_pending(3)
+        check("pending accumulates across saves", st.pending_tiles() == 4,
+              str(st.pending_tiles()))
+        st.db.commit()
+        info = archive.build_archive(st, os.path.join(args.out, "batch.pmtiles"),
+                                     name="batch")
+        check("serializing the archive clears the debt", st.pending_tiles() == 0,
+              str(st.pending_tiles()))
+    with tilestore.TileStore(batch_db) as st:
+        st.bump_pending(7)
+        st.db.commit()
+    with tilestore.TileStore(batch_db) as st:
+        check("the debt survives a reopen (a ComfyUI restart)",
+              st.pending_tiles() == 7, str(st.pending_tiles()))
+    pmt = os.path.join(args.out, "batch.pmtiles")
+    check("archive_info reports the debt",
+          archive.archive_info(pmt)["pending_tiles"] == 7,
+          str(archive.archive_info(pmt)["pending_tiles"]))
+
+    print("12. deferred pyramid")
     # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
     # produce exactly the same pyramid, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")
