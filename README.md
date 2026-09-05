@@ -224,11 +224,16 @@ checkboxes in the top bar (`x` and `d`).
 
 **`mark`** — triage tiles by dragging:
 
-| drag | | |
+| shift | alt | ctrl |
 |---|---|---|
-| **shift** | approve | green outline with an outward shadow, nothing painted over the tile |
-| **alt** | reject | dimmed to 62.5% black, so it recedes |
-| **ctrl** | deselect | |
+| approve — green outline with an outward shadow, nothing painted over the tile | reject — dimmed to 62.5% black, so it recedes | deselect |
+
+**Drag** to mark a rectangle of tiles; **click** to mark the whole render under
+the cursor. Marking the single tile you happened to click is almost never what
+is meant — a render here is a 2×3 block, so five sixths of it would stay
+unmarked. The click resolves the deepest tile carrying real metadata under the
+point (so a zoomed-out click still lands on the render that made what you are
+looking at) and marks the block its own `grid` describes.
 
 The three numbers worth tuning are constants at the top of `overlays.js`:
 `GROUPS.reject.stored` (the dimming, `.625`), `OUTLINE_PX` (`3`),

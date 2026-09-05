@@ -432,6 +432,36 @@ const BoxSelector = L.Map.BoxZoom.extend({
  * two ways for the same silence.) */
 map.boxSelector = new BoxSelector(map);
 
+/** Modifier-click marks the whole render under the cursor, not the one tile.
+ *
+ * A render is an nx x ny block of tiles, so marking the tile you happened to
+ * click is almost never what is meant -- you would leave five sixths of it
+ * unmarked. `resolveUnder` finds the deepest tile that carries real metadata
+ * under the point (so a zoomed-out click still lands on the render that made
+ * what you are looking at), and its own `grid` gives the block to mark.
+ */
+async function markRenderAt(latlng, group) {
+  const hit = await resolveUnder(latlng);
+  if (!hit || !hit.meta) return;              // nothing rendered here
+  const { coord, meta } = hit;
+  const grid = (Array.isArray(meta.grid) && meta.grid.length === 4)
+    ? meta.grid.map(Number)
+    : [0, 0, 1, 1];                           // a single-tile save has no grid
+  const [ix, iy, nx, ny] = grid;
+  // The metadata is at the leaf zoom; the mask may be coarser on a deep map.
+  const span = Math.pow(2, overlay.maskZ - coord.z);
+  const ox = (coord.x - ix) * span;
+  const oy = (coord.y - iy) * span;
+  paintTiles(ox, oy, ox + nx * span, oy + ny * span, group);
+}
+
+map.on('click', (ev) => {
+  if (!overlay.on.select || !overlay.masks || !state.meta) return;
+  const oe = ev.originalEvent || {};
+  if (!(oe.shiftKey || oe.altKey || oe.ctrlKey)) return;
+  markRenderAt(ev.latlng, oe.ctrlKey ? null : oe.altKey ? 'reject' : 'approve');
+});
+
 map.on('boxselectend', (ev) => {
   if (!overlay.on.select || !overlay.masks) return;
   // shift approves (outlined), alt rejects (dimmed), ctrl deselects.
