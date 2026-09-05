@@ -224,8 +224,13 @@ checkboxes in the top bar (`x` and `d`).
 
 **`select`** — shift-drag marks tiles, ctrl-drag marks a second group, alt-drag
 erases, `Esc` clears. The header then shows the count with `copy` (the
-coordinates as JSON) and `clear`. Leaflet's own shift-drag box zoom is disabled
-while this is on, and restored when it is off.
+coordinates as JSON) and `clear`.
+
+Shift-drag is Leaflet's *box zoom* — zoom-to-rectangle, not a selection — and
+both cannot own the gesture, so `boxZoom` stands down while `select` is on and
+gets it back when it is off. Either overlay can also be set from the URL
+(`&select=1`, `&debug=1`), which wins over the stored preference, so a link can
+turn one on for someone whose last session had it off.
 
 The selection is not DOM: it lives in an off-screen canvas at **one pixel per
 tile**, and a `GridLayer` blits the matching crop into each visible tile with

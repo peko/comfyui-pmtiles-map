@@ -274,7 +274,14 @@ const BoxSelector = L.Map.BoxZoom.extend({
     });
   },
 });
-L.Map.addInitHook('addHandler', 'boxSelector', BoxSelector);
+/* NOT `L.Map.addInitHook('addHandler', ...)`, which is how this is usually
+ * written: an init hook runs inside the Map constructor, and viewer.js built
+ * the map before this file was even fetched, so the handler would never be
+ * created and shift-drag would do nothing at all. Attach it to the live
+ * instance instead. (`addHandler` also only enables a handler when
+ * `map.options[name]` is truthy, so that spelling needs a mergeOptions too --
+ * two ways for the same silence.) */
+map.boxSelector = new BoxSelector(map);
 
 map.on('boxselectend', (ev) => {
   if (!overlay.on.select || !overlay.mask) return;
@@ -302,16 +309,36 @@ function renderSelectionInfo() {
   }
 }
 
+/* Present in the URL wins over the stored preference, absent falls back to it --
+ * so a pasted link can turn an overlay on for someone whose last session had it
+ * off. writeUrlState copies the existing query, so these survive a pan. */
+function urlFlag(name) {
+  const q = new URLSearchParams(location.search);
+  if (!q.has(name)) return null;
+  return q.get(name) !== '0' && q.get(name) !== 'false';
+}
+
+function writeUrlFlag(name, on) {
+  const q = new URLSearchParams(location.search);
+  if (on) q.set(name, '1'); else q.delete(name);
+  history.replaceState(null, '', `${location.pathname}?${q}`);
+}
+
 function setOverlay(kind, on) {
   overlay.on[kind] = on;
   state.ui[`overlay_${kind}`] = on;
   storeUi();
+  writeUrlFlag(kind, on);
   const toggle = el(`${kind === 'select' ? 'select' : 'debug'}-toggle`);
   if (toggle) toggle.checked = on;
 
   if (kind === 'select') {
-    // Leaflet's own shift+drag box zoom would fight the selector.
-    if (on) map.boxZoom.disable(); else map.boxZoom.enable();
+    // Shift-drag is Leaflet's *box zoom* -- zoom-to-rectangle, not a selection.
+    // Both cannot own the gesture, so boxZoom stands down while selecting and
+    // gets it back afterwards. (nn-lineart did the same, permanently.)
+    if (on) { map.boxZoom.disable(); map.boxSelector.enable(); }
+    else { map.boxSelector.disable(); map.boxZoom.enable(); }
+    el('map').classList.toggle('selecting', on);
     if (on && !overlay.select) { overlay.select = makeSelectLayer(); overlay.select.addTo(map); }
     else if (!on && overlay.select) { overlay.select.remove(); overlay.select = null; }
     renderSelectionInfo();
@@ -364,5 +391,7 @@ window.addEventListener('keydown', (ev) => {
 
 // state.ui is read from localStorage at the end of viewer.js, i.e. before this
 // file runs.
-setOverlay('select', state.ui.overlay_select === true);
-setOverlay('debug', state.ui.overlay_debug === true);
+const wantSelect = urlFlag('select');
+const wantDebug = urlFlag('debug');
+setOverlay('select', wantSelect === null ? state.ui.overlay_select === true : wantSelect);
+setOverlay('debug', wantDebug === null ? state.ui.overlay_debug === true : wantDebug);
