@@ -37,6 +37,14 @@ border coloured when the tile is upscaled or over-zoomed rather than stored (key
   <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
   <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
   <button id="reload-tiles" class="icon" title="refetch every visible tile (key: r)">⟳</button>
+  <select id="pyramid-mode" title="how the zoom pyramid is built.
+scale: average four tiles into one — the classic pyramid.
+sample: stop averaging once a render would be under 64 px and take a quarter of
+each of the four instead, so the shallow levels stay legible instead of turning
+into static.">
+    <option value="scale">scale</option>
+    <option value="sample">sample</option>
+  </select>
   <button id="build-map" class="icon" title="build the zoom pyramid and re-serialize the archive">⛰ build</button>
   <span id="pulse" class="pulse"></span>
 </header>
@@ -123,7 +131,12 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
         <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
           each one as it changes</dd>
         <dt>⟳</dt><dd>refetch everything visible without moving (<kbd>r</kbd>)</dd>
-        <dt>⛰ build</dt><dd>build the zoom pyramid and re-serialize the archive</dd>
+        <dt>⛰ build</dt><dd>build the zoom pyramid and re-serialize the archive.
+          The picker beside it chooses how: <b>scale</b> averages four tiles into
+          one — the classic pyramid — while <b>sample</b> stops averaging once a
+          render would go under 64 px and takes a quarter of each of the four
+          instead, so the shallow levels stay legible rather than turning to
+          static. Building records the choice on the map</dd>
       </dl>
 
       <h3>search</h3>

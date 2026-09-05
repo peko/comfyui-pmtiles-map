@@ -308,6 +308,14 @@ def archive_info(path):
                                     "pyramid_stale") == "1"
             or (hdr["min_zoom"] == hdr["max_zoom"]
                 and hdr["addressed_tiles_count"] > 1)),
+        # What the map was last built with, so the viewer's build control shows
+        # the map's own setting rather than a guess.
+        "pyramid_mode": tilestore.read_map_meta(
+            f"{os.path.splitext(path)[0]}.tiles.db", "pyramid_mode",
+            tilestore.PYRAMID_SCALE),
+        "pyramid_min_px": int(tilestore.read_map_meta(
+            f"{os.path.splitext(path)[0]}.tiles.db", "pyramid_min_px",
+            tilestore.MIN_CONTENT_PX) or tilestore.MIN_CONTENT_PX),
         "bytes": os.path.getsize(path),
         "mtime": os.stat(path).st_mtime,
     }
@@ -394,6 +402,8 @@ def store_info(db_path):
         "has_store": True,
         "pending_tiles": extent["pending_tiles"],
         "pyramid_stale": extent["pyramid_stale"],
+        "pyramid_mode": extent["pyramid_mode"],
+        "pyramid_min_px": extent["pyramid_min_px"],
         "bytes": os.path.getsize(db_path),
         "mtime": os.stat(db_path).st_mtime,
     }

@@ -40,7 +40,11 @@ DERIVED = "derived"
 #           being picked over its siblings.
 PYRAMID_SCALE = "scale"
 PYRAMID_SAMPLE = "sample"
-PYRAMID_MODES = (PYRAMID_SAMPLE, PYRAMID_SCALE)
+# `scale` first: it is the default, being what a pyramid conventionally means,
+# and a map of tiles that form a continuous surface wants nothing else. `sample`
+# is for a map that is a *grid of separate images*, where the average of four of
+# them is not a smaller picture of anything.
+PYRAMID_MODES = (PYRAMID_SCALE, PYRAMID_SAMPLE)
 
 # One leaf tile's content occupies `tile_size >> (leaf_zoom - z)` pixels at
 # level z. At 512 px tiles: 512, 256, 128, 64, then 32 -- which is where a
@@ -496,6 +500,10 @@ def read_extent(db_path):
             "SELECT value FROM map_meta WHERE key='pending_tiles'").fetchone()
         stale = db.execute(
             "SELECT value FROM map_meta WHERE key='pyramid_stale'").fetchone()
+        pmode = db.execute(
+            "SELECT value FROM map_meta WHERE key='pyramid_mode'").fetchone()
+        pmin = db.execute(
+            "SELECT value FROM map_meta WHERE key='pyramid_min_px'").fetchone()
       except sqlite3.Error:
         return None
     return {
@@ -504,6 +512,8 @@ def read_extent(db_path):
         "tile_size": int(size[0]) if size else 256,
         "pending_tiles": int(pending[0]) if pending and pending[0] else 0,
         "pyramid_stale": (stale[0] == "1") if stale else (minz == maxz and count > 1),
+        "pyramid_mode": pmode[0] if pmode and pmode[0] in PYRAMID_MODES else PYRAMID_SCALE,
+        "pyramid_min_px": int(pmin[0]) if pmin and pmin[0] else MIN_CONTENT_PX,
     }
 
 
@@ -843,7 +853,7 @@ class TileStore:
         being told again, exactly as `store_format` works.
         """
         if mode is None:
-            mode = self.get_map_meta("pyramid_mode", PYRAMID_SAMPLE)
+            mode = self.get_map_meta("pyramid_mode", PYRAMID_SCALE)
         elif mode not in PYRAMID_MODES:
             raise ValueError(f"pyramid mode must be one of {PYRAMID_MODES}")
         else:
@@ -853,7 +863,7 @@ class TileStore:
         else:
             min_px = max(1, int(min_px))
             self.set_map_meta("pyramid_min_px", str(min_px))
-        return (mode if mode in PYRAMID_MODES else PYRAMID_SAMPLE), min_px
+        return (mode if mode in PYRAMID_MODES else PYRAMID_SCALE), min_px
 
     def _scales_at(self, z, leaf_zoom, mode, min_px):
         """Should level `z` average its four children, or sample one of them?

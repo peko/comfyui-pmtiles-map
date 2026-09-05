@@ -349,6 +349,14 @@ def build_routes(maps_dir_fn):
             quality = int(request.query.get("quality", 80))
         except ValueError:
             raise web.HTTPBadRequest(reason="min_zoom and quality must be integers")
+        pyramid_mode = request.query.get("pyramid_mode") or None
+        if pyramid_mode is not None and pyramid_mode not in tilestore.PYRAMID_MODES:
+            raise web.HTTPBadRequest(reason="unknown pyramid_mode")
+        try:
+            pyramid_min_px = request.query.get("pyramid_min_px")
+            pyramid_min_px = int(pyramid_min_px) if pyramid_min_px else None
+        except ValueError:
+            raise web.HTTPBadRequest(reason="pyramid_min_px must be an integer")
 
         state = {"state": "running", "phase": "starting", "done": 0, "total": 0,
                  "derived": 0, "seconds": 0.0}
@@ -365,7 +373,9 @@ def build_routes(maps_dir_fn):
                     def on_level(level, done, total):
                         state.update(level=level, done=done, total=total)
 
-                    written = store.rebuild_pyramid(min_zoom, progress=on_level)
+                    written = store.rebuild_pyramid(
+                        min_zoom, progress=on_level,
+                        mode=pyramid_mode, min_px=pyramid_min_px)
                     state["derived"] = len(written)
                     store.db.commit()
                 if want_archive:

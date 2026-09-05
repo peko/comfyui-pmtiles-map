@@ -131,7 +131,7 @@ class SavePMTilesMap:
             # string, and a wired widget draws no editor at all.
             "optional": {
                 "pyramid_mode": (list(tilestore.PYRAMID_MODES),
-                                 {"default": tilestore.PYRAMID_SAMPLE,
+                                 {"default": tilestore.PYRAMID_SCALE,
                                   "tooltip": "how a zoom level is built from the one "
                                              "below. `scale` averages all four "
                                              "children into one tile -- the classic "

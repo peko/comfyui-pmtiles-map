@@ -292,6 +292,7 @@ function showMap(info) {
   }
   writeUrlState();
   setStats(info);
+  showPyramidMode(info);
 
   // Keep the sidebar on the same tile after a switch: comparing two archives
   // means comparing what each recorded for the same coordinate.
@@ -326,6 +327,15 @@ function showMap(info) {
       startFeed();
     })
     .catch(() => { state.seq = 0; });
+}
+
+/** The build control follows the map: a map already built one way should not
+ *  silently be rebuilt the other because the picker kept its last value. */
+function showPyramidMode(info) {
+  const picker = el('pyramid-mode');
+  if (!picker || !info) return;
+  const mode = info.pyramid_mode;
+  if (mode && [...picker.options].some((o) => o.value === mode)) picker.value = mode;
 }
 
 function setStats(info) {
@@ -1246,8 +1256,12 @@ async function buildMap() {
   state.building = true;
   button.disabled = true;
   try {
-    const res = await fetch(`/map/${encodeURIComponent(state.name)}/build`,
-      { method: 'POST' });
+    // The mode is sent explicitly, so pressing build is also how you change it:
+    // rebuild_pyramid records what it was given, and every later build (and the
+    // CLI) then agrees without being told again.
+    const mode = el('pyramid-mode').value;
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}/build`
+      + `?pyramid_mode=${encodeURIComponent(mode)}`, { method: 'POST' });
     if (!res.ok) {
       setStats(state.meta);
       el('stats').textContent = `build refused: ${res.status}`;

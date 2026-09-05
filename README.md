@@ -180,10 +180,15 @@ Below about 64 px a render is no longer an image, and averaging four of them
 gives the grey static of a dead television channel — the shallow half of the
 pyramid is unreadable however far you zoom out.
 
-`pyramid_mode` (`sample`, the default) keeps averaging while the content stays
-above `pyramid_min_px` (64), and past that point builds each tile from **a
-quarter of each of its four children** — `1/4 + 1/4 + 1/4 + 1/4`, cropped at 1:1
-and never resampled. The scale then stops shrinking and z0–z4 stay legible.
+`pyramid_mode: sample` keeps averaging while the content stays above
+`pyramid_min_px` (64), and past that point builds each tile from **a quarter of
+each of its four children** — `1/4 + 1/4 + 1/4 + 1/4`, cropped at 1:1 and never
+resampled. The scale then stops shrinking and z0–z4 stay legible.
+
+`scale` is the default, being what a pyramid conventionally means; `sample` is
+the opt-in for a map that is a *grid of separate images*, where the average of
+four of them is not a smaller picture of anything. The viewer has a picker next
+to **⛰ build**, so switching mode is the same gesture as rebuilding.
 
 The trade is coverage rather than resolution: each level past the floor shows a
 quarter of the area at the same size. That is inherent — constant scale and a
@@ -192,10 +197,10 @@ children is what stops it being a lottery: keeping one child whole would be
 cheaper (the bytes could be copied outright) but the same branch would win at
 every level, so three quarters of the map would never appear at any zoom.
 
-`scale` is still there, and is the right choice for a map whose tiles are a
-continuous surface rather than a grid of separate images. Both the mode and the
-floor are remembered on the map, so the viewer's ⛰ build and a later
-`--rebuild-pyramid` use what the map was built with:
+Both the mode and the floor are remembered on the map — but only when stated, so
+a plain rebuild never stamps one. The viewer's picker shows the map's own
+setting rather than its last value, and a later `--rebuild-pyramid` with no
+arguments reuses whatever the map was built with:
 
 ```bash
 python tools/pmtiles_map.py --rebuild-pyramid <map> --pyramid-mode scale
