@@ -303,6 +303,10 @@ function showMap(info) {
   // Search results belong to one archive, so re-run or clear them on a switch.
   if (el('search-input').value.trim()) runSearch(); else renderSearch(null, '');
 
+  // overlays.js, if it loaded: the canvas layers take their tile size from the
+  // archive, so they have to be rebuilt when the archive changes.
+  if (typeof overlaysMapChanged === 'function') overlaysMapChanged(info);
+
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
   state.seq = undefined;

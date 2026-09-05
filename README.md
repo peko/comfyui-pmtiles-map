@@ -217,6 +217,41 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   clamp it — which would animate mid-switch and make the outgoing layer fetch
   tiles for a map you are leaving.
 
+### Selecting tiles, and seeing which level they came from
+
+Two canvas overlays, both off by default, toggled by the `select` and `debug`
+checkboxes in the top bar (`x` and `d`).
+
+**`select`** — shift-drag marks tiles, ctrl-drag marks a second group, alt-drag
+erases, `Esc` clears. The header then shows the count with `copy` (the
+coordinates as JSON) and `clear`. Leaflet's own shift-drag box zoom is disabled
+while this is on, and restored when it is off.
+
+The selection is not DOM: it lives in an off-screen canvas at **one pixel per
+tile**, and a `GridLayer` blits the matching crop into each visible tile with
+smoothing off. So it is zoom-independent — panning costs one `drawImage` a tile,
+and marking ten thousand tiles costs the same as marking one. (The technique is
+from [peko/nn-lineart](https://github.com/peko/nn-lineart); clear-then-fill with
+`destination-out` is what stops a re-selected region accumulating alpha.)
+
+Because the mask is keyed by granularity rather than by map, **the selection
+survives an archive switch** whenever the two maps share a `max_zoom` — which is
+exactly the case the view-keeping above exists for: mark a region in one
+rendering, press `2`, compare the same subjects in the other.
+
+**`debug`** — per tile: archive `z/x/y`, map zoom, tile pixel size and the NW
+corner's lat/lng, with the border coloured by where the tile *actually* came
+from: stored, **upscaled** from a shallower level, or **over-zoomed** past the
+deepest one. Neither of the latter two is a tile the archive holds, and nothing
+else in the UI distinguishes them.
+
+Two things to know if you touch this code: the overlays take their `tileSize`
+from the archive, so `coords.x/y` are archive tile indices and
+`archiveZoom(coords.z)` recovers the zoom (a 512 px archive runs the map one
+level ahead — see the tile-size trap below); and a box corner projected through
+lat/lng lands ~1e-7 px off an exact tile boundary, so the span is snapped with
+an epsilon or `floor`/`ceil` silently takes an extra row.
+
 | key | |
 |---|---|
 | `1`–`9` | switch archive (view kept) |
@@ -224,7 +259,8 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 | `s` | save the selected tile to the liked list |
 | `b` | show/hide the left pane |
 | `r` | refetch every visible tile |
-| `Esc` | close the preview |
+| `x`, `d` | tile selection / per-tile debug overlay |
+| `Esc` | clear the selection, or close the preview |
 
 ## HTTP API
 

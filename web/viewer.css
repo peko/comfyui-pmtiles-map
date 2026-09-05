@@ -63,6 +63,12 @@ button.icon.stale { color: #ffce6b; border-color: #7a6132; }
 button.icon.stale::after { content: ' •'; }
 #map.grid .leaflet-tile { outline: 1px solid rgba(124, 196, 255, .35); outline-offset: -1px; }
 
+/* The canvas overlays sit above the tiles and must never swallow a click --
+ * every gesture on the map belongs to the map. */
+.pm-overlay-tile { pointer-events: none; }
+.sel-info { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
+.sel-info #sel-count { font-variant-numeric: tabular-nums; }
+
 aside {
   width: 330px; flex: none; overflow-y: auto; padding: 12px;
   border-left: 1px solid var(--line); background: var(--panel);

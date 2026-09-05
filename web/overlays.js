@@ -1,0 +1,368 @@
+/* Two canvas overlays over the tile layer: a selection mask, and a per-tile
+ * debug readout.  Loaded after viewer.js, whose top-level `const`s (map, state,
+ * el, TILE_PX, archiveZoom) are global lexical bindings and therefore visible
+ * here.
+ *
+ * The technique is the one from peko/nn-lineart: keep the selection in an
+ * off-screen canvas at **one pixel per tile**, and have a GridLayer blit the
+ * matching crop of it into each visible tile, scaled up with smoothing off.
+ * The mask is then independent of zoom -- panning and zooming cost a
+ * drawImage per tile and nothing else, and there is no per-tile DOM to keep in
+ * step with a selection that may cover thousands of tiles.
+ *
+ * The one adaptation this map needs: nn-lineart used CRS.Simple with negative
+ * zooms and a fixed 256 px tile, so it could hardcode `1 << -coords.z`.  Here
+ * the archive may use 512 px tiles, in which case the map runs one zoom ahead
+ * of the archive (see TRAP 19 / `shift` in viewer.js).  Giving the overlay the
+ * archive's own `tileSize` makes `coords.x`/`coords.y` archive tile indices
+ * directly, and `archiveZoom(coords.z)` recovers the archive's zoom -- so the
+ * overlay grid is the archive grid, at any tile size.
+ */
+'use strict';
+
+/* One pixel per tile, so a z=11 map is a 2048x2048 mask = 16 MB of RGBA. Past
+ * that the mask is kept at a coarser zoom and one pixel covers a block of
+ * tiles: a selection is a UI affordance, not a reason to allocate a gigabyte. */
+const MASK_MAX_PX = 2048;
+
+const SELECT_COLORS = {
+  shift: 'rgba(124, 196, 255, .40)',   // the accent blue: plain "selected"
+  ctrl: 'rgba(126, 231, 135, .40)',    // a second, distinguishable group
+};
+
+const overlay = {
+  mask: null,
+  maskCtx: null,
+  maskZ: null,
+  select: null,
+  debug: null,
+  count: 0,
+  on: { select: false, debug: false },
+};
+
+/* ------------------------------------------------------------------- mask */
+
+function maskZoomFor(info) {
+  let z = Number(info.max_zoom) || 0;
+  while ((1 << z) > MASK_MAX_PX) z -= 1;
+  return Math.max(0, z);
+}
+
+function ensureMask(info) {
+  const want = maskZoomFor(info);
+  if (overlay.mask && overlay.maskZ === want) return false;
+  // Reallocating only when the granularity changes is what lets a selection
+  // survive an archive switch: two maps built from the same manifest have the
+  // same max_zoom, and the same coordinate means the same render in both, so
+  // keeping the mask is the whole point of switching.
+  overlay.mask = document.createElement('canvas');
+  overlay.mask.width = overlay.mask.height = 1 << want;
+  overlay.maskCtx = overlay.mask.getContext('2d', { willReadFrequently: true });
+  overlay.maskZ = want;
+  overlay.count = 0;
+  return true;
+}
+
+function countPainted(x, y, w, h) {
+  if (w <= 0 || h <= 0) return 0;
+  const data = overlay.maskCtx.getImageData(x, y, w, h).data;
+  let n = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i]) n += 1;
+  return n;
+}
+
+/* A pixel point is a projection of a latlng that was itself unprojected from a
+ * mouse position, so a corner that lands exactly on a tile boundary arrives as
+ * boundary +- 1e-7 -- and a bare floor()/ceil() then takes a whole extra row or
+ * column. Snap to the boundary first; a real drag is never within 1e-6 of one,
+ * so nothing but the degenerate case moves. */
+const TILE_EPS = 1e-6;
+
+/** Two pixel corners -> the half-open tile rectangle they cover. */
+function tileSpan(nw, se) {
+  const x0 = Math.floor(nw.x / TILE_PX + TILE_EPS);
+  const y0 = Math.floor(nw.y / TILE_PX + TILE_EPS);
+  return [
+    x0, y0,
+    Math.max(x0 + 1, Math.ceil(se.x / TILE_PX - TILE_EPS)),
+    Math.max(y0 + 1, Math.ceil(se.y / TILE_PX - TILE_EPS)),
+  ];
+}
+
+/** Paint (or erase) a rectangle of tiles, in mask pixels. */
+function paintTiles(x0, y0, x1, y1, color) {
+  const side = 1 << overlay.maskZ;
+  const x = Math.max(0, Math.min(side, x0));
+  const y = Math.max(0, Math.min(side, y0));
+  const w = Math.max(0, Math.min(side, x1) - x);
+  const h = Math.max(0, Math.min(side, y1) - y);
+  if (!w || !h) return;
+
+  const ctx = overlay.maskCtx;
+  overlay.count -= countPainted(x, y, w, h);
+  // Clear first, then fill: painting a translucent colour over an existing one
+  // would accumulate alpha, so re-selecting a region would keep darkening it.
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x, y, w, h);
+  if (color) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+    overlay.count += w * h;
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  if (overlay.select) overlay.select.redraw();
+  renderSelectionInfo();
+}
+
+function clearSelection() {
+  if (!overlay.mask) return;
+  overlay.maskCtx.clearRect(0, 0, overlay.mask.width, overlay.mask.height);
+  overlay.count = 0;
+  if (overlay.select) overlay.select.redraw();
+  renderSelectionInfo();
+}
+
+/** Every selected tile, as archive coordinates at the mask's zoom. */
+function selectedTiles() {
+  if (!overlay.mask || !overlay.count) return [];
+  const side = 1 << overlay.maskZ;
+  const data = overlay.maskCtx.getImageData(0, 0, side, side).data;
+  const out = [];
+  for (let i = 0, p = 3; p < data.length; p += 4, i += 1) {
+    if (data[p]) out.push({ z: overlay.maskZ, x: i % side, y: (i / side) | 0 });
+  }
+  return out;
+}
+
+/* ----------------------------------------------------------------- layers */
+
+/** Archive-grid GridLayer options, so coords.x/y are archive tile indices. */
+function gridOptions(zIndex) {
+  const info = state.meta || {};
+  return {
+    tileSize: Number(info.tile_size) || 256,
+    zIndex,
+    noWrap: true,
+    // Not `pane: 'overlayPane'`: the tile pane is where the grid geometry
+    // lives, and these have to line up with the tiles exactly.
+    className: 'pm-overlay-tile',
+    updateWhenZooming: false,
+  };
+}
+
+function makeSelectLayer() {
+  const Layer = L.GridLayer.extend({
+    createTile(coords) {
+      const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+      const size = this.getTileSize();
+      tile.width = size.x;
+      tile.height = size.y;
+      if (!overlay.mask) return tile;
+      const ctx = tile.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      // Mask pixels covered by this tile, per side. >= 1 zoomed out of the
+      // mask's level, < 1 when zoomed past it.
+      const span = Math.pow(2, overlay.maskZ - archiveZoom(coords.z));
+      const sx = coords.x * span;
+      const sy = coords.y * span;
+      const side = 1 << overlay.maskZ;
+      if (sx >= side || sy >= side || sx < 0 || sy < 0) return tile;
+      if (span >= 1) {
+        ctx.drawImage(overlay.mask, sx, sy, span, span, 0, 0, size.x, size.y);
+      } else {
+        // Below one mask pixel per tile a fractional source rect is at the
+        // mercy of the browser's sampling; read the pixel and fill instead.
+        const px = overlay.maskCtx.getImageData(
+          Math.floor(sx), Math.floor(sy), 1, 1).data;
+        if (px[3]) {
+          ctx.fillStyle = `rgba(${px[0]},${px[1]},${px[2]},${px[3] / 255})`;
+          ctx.fillRect(0, 0, size.x, size.y);
+        }
+      }
+      return tile;
+    },
+  });
+  return new Layer(gridOptions(300));
+}
+
+function makeDebugLayer() {
+  const Layer = L.GridLayer.extend({
+    createTile(coords) {
+      const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+      const size = this.getTileSize();
+      tile.width = size.x;
+      tile.height = size.y;
+      const ctx = tile.getContext('2d');
+      const az = archiveZoom(coords.z);
+      const info = state.meta || {};
+
+      // The border says which level the tile really came from, which is the
+      // question worth asking when a map looks wrong: below min_zoom Leaflet is
+      // upscaling a shallower level (TRAP 20), above max_zoom it is over-zooming
+      // a tile it already has, and neither is a tile the archive holds.
+      let edge = 'rgba(124, 196, 255, .55)';
+      let note = '';
+      if (az < info.min_zoom) { edge = 'rgba(126, 231, 135, .7)'; note = ' upscaled'; }
+      else if (az > info.max_zoom) { edge = 'rgba(255, 206, 107, .8)'; note = ' over-zoom'; }
+
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1;
+      ctx.beginPath();               // top and left only, so neighbours do not
+      ctx.moveTo(size.x - 0.5, 0.5); // draw the same line twice
+      ctx.lineTo(0.5, 0.5);
+      ctx.lineTo(0.5, size.y - 0.5);
+      ctx.stroke();
+
+      const nw = map.unproject(
+        L.point(coords.x * TILE_PX, coords.y * TILE_PX), az);
+      const lines = [
+        `${az}/${coords.x}/${coords.y}${note}`,
+        `map z${coords.z} · ${size.x}px`,
+        `${nw.lat.toFixed(5)}, ${nw.lng.toFixed(5)}`,
+      ];
+      ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+      const width = Math.max(...lines.map((t) => ctx.measureText(t).width)) + 12;
+      ctx.fillStyle = 'rgba(16, 18, 23, .72)';
+      ctx.fillRect(0, 0, Math.min(width, size.x), 4 + lines.length * 14);
+      ctx.fillStyle = '#e6e9ef';
+      lines.forEach((text, i) => ctx.fillText(text, 6, 15 + i * 14));
+      return tile;
+    },
+  });
+  return new Layer(gridOptions(400));
+}
+
+/* ------------------------------------------------------------ box selector */
+/* L.Map.BoxZoom, but it reports the drag instead of zooming to it, and only
+ * engages with a modifier held so an ordinary drag still pans. Leaflet's own
+ * boxZoom is shift+drag, so it has to be disabled while this is on. */
+
+const BoxSelector = L.Map.BoxZoom.extend({
+  _onMouseDown(e) {
+    if (!(e.shiftKey || e.ctrlKey || e.altKey)) return false;
+    if (e.which !== 1 && e.button !== 0) return false;
+    this._map.dragging.disable();
+    this._clearDeferredResetState();
+    this._resetState();
+    L.DomUtil.disableTextSelection();
+    L.DomUtil.disableImageDrag();
+    this._startPoint = this._map.mouseEventToContainerPoint(e);
+    L.DomEvent.on(document, {
+      contextmenu: L.DomEvent.stop,
+      mousemove: this._onMouseMove,
+      mouseup: this._onMouseUp,
+      keydown: this._onKeyDown,
+    }, this);
+    return true;
+  },
+
+  _onMouseUp(e) {
+    if (e.which !== 1 && e.button !== 0) return;
+    this._map.dragging.enable();
+    this._finish();
+    if (!this._moved) return;
+    this._clearDeferredResetState();
+    this._resetStateTimeout = setTimeout(L.Util.bind(this._resetState, this), 0);
+    this._map.fire('boxselectend', {
+      bounds: new L.LatLngBounds(
+        this._map.containerPointToLatLng(this._startPoint),
+        this._map.containerPointToLatLng(this._point)),
+      shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey,
+    });
+  },
+});
+L.Map.addInitHook('addHandler', 'boxSelector', BoxSelector);
+
+map.on('boxselectend', (ev) => {
+  if (!overlay.on.select || !overlay.mask) return;
+  // alt erases; shift and ctrl paint two distinguishable groups.
+  const color = ev.alt ? null
+    : ev.ctrl ? SELECT_COLORS.ctrl
+      : SELECT_COLORS.shift;
+  // Tile indices at the mask's zoom. TILE_PX is Leaflet's 256 whatever the
+  // archive's tile size -- the same rule as blockBounds in viewer.js.
+  const nw = map.project(ev.bounds.getNorthWest(), overlay.maskZ);
+  const se = map.project(ev.bounds.getSouthEast(), overlay.maskZ);
+  paintTiles(...tileSpan(nw, se), color);
+});
+
+/* --------------------------------------------------------------------- ui */
+
+function renderSelectionInfo() {
+  const box = el('sel-info');
+  if (!box) return;
+  box.hidden = !overlay.on.select || !overlay.count;
+  const label = el('sel-count');
+  if (label) {
+    const each = overlay.maskZ === (state.meta || {}).max_zoom ? 'tile' : 'cell';
+    label.textContent = `${overlay.count} ${each}${overlay.count === 1 ? '' : 's'}`;
+  }
+}
+
+function setOverlay(kind, on) {
+  overlay.on[kind] = on;
+  state.ui[`overlay_${kind}`] = on;
+  storeUi();
+  const toggle = el(`${kind === 'select' ? 'select' : 'debug'}-toggle`);
+  if (toggle) toggle.checked = on;
+
+  if (kind === 'select') {
+    // Leaflet's own shift+drag box zoom would fight the selector.
+    if (on) map.boxZoom.disable(); else map.boxZoom.enable();
+    if (on && !overlay.select) { overlay.select = makeSelectLayer(); overlay.select.addTo(map); }
+    else if (!on && overlay.select) { overlay.select.remove(); overlay.select = null; }
+    renderSelectionInfo();
+  } else if (on && !overlay.debug) {
+    overlay.debug = makeDebugLayer();
+    overlay.debug.addTo(map);
+  } else if (!on && overlay.debug) {
+    overlay.debug.remove();
+    overlay.debug = null;
+  }
+}
+
+/** Called by showMap once a map is on screen. */
+function overlaysMapChanged(info) {
+  const reset = ensureMask(info);
+  // Rebuild the layers so their tileSize follows the new archive's.
+  for (const kind of ['select', 'debug']) {
+    if (!overlay.on[kind]) continue;
+    setOverlay(kind, false);
+    setOverlay(kind, true);
+  }
+  if (reset) renderSelectionInfo();
+}
+
+el('select-toggle').addEventListener('change', (ev) => setOverlay('select', ev.target.checked));
+el('debug-toggle').addEventListener('change', (ev) => setOverlay('debug', ev.target.checked));
+el('sel-clear').addEventListener('click', clearSelection);
+el('sel-copy').addEventListener('click', () => {
+  const tiles = selectedTiles();
+  navigator.clipboard.writeText(JSON.stringify(
+    { map: state.name, zoom: overlay.maskZ, tiles }, null, 2)).then(() => {
+    const btn = el('sel-copy');
+    btn.textContent = 'copied';
+    setTimeout(() => { btn.textContent = 'copy'; }, 900);
+  });
+});
+
+window.addEventListener('keydown', (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const tag = (ev.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
+  if (ev.key === 'd') { ev.preventDefault(); setOverlay('debug', !overlay.on.debug); return; }
+  if (ev.key === 'x') { ev.preventDefault(); setOverlay('select', !overlay.on.select); return; }
+  // Only once the preview has taken its own Escape.
+  if (ev.key === 'Escape' && el('preview').hidden && overlay.count) {
+    ev.preventDefault();
+    clearSelection();
+  }
+});
+
+// state.ui is read from localStorage at the end of viewer.js, i.e. before this
+// file runs.
+setOverlay('select', state.ui.overlay_select === true);
+setOverlay('debug', state.ui.overlay_debug === true);

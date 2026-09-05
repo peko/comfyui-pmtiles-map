@@ -25,6 +25,15 @@ archive: reads the .pmtiles itself — what would be uploaded to a CDN.">src
   <span id="stats" class="stats">loading…</span>
   <span class="spacer"></span>
   <label class="toggle"><input type="checkbox" id="grid-toggle"> tile grid</label>
+  <label class="toggle" title="shift-drag to select tiles, ctrl-drag for a second
+group, alt-drag to erase. Esc clears. (key: x)"><input type="checkbox" id="select-toggle"> select</label>
+  <label class="toggle" title="per-tile z/x/y, map zoom and corner lat/lng, with the
+border coloured when the tile is upscaled or over-zoomed rather than stored (key: d)"><input type="checkbox" id="debug-toggle"> debug</label>
+  <span id="sel-info" class="sel-info" hidden>
+    <span id="sel-count"></span>
+    <button id="sel-copy" class="icon" title="copy the selected coordinates as JSON">copy</button>
+    <button id="sel-clear" class="icon" title="clear the selection (Esc)">clear</button>
+  </span>
   <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
   <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
   <button id="reload-tiles" class="icon" title="refetch every visible tile (key: r)">⟳</button>
@@ -93,5 +102,6 @@ archive: reads the .pmtiles itself — what would be uploaded to a CDN.">src
 
 <script src="assets/vendor/leaflet/leaflet.js"></script>
 <script src="assets/viewer.js"></script>
+<script src="assets/overlays.js"></script>
 </body>
 </html>
