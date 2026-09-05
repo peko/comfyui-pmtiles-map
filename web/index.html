@@ -47,6 +47,7 @@ border coloured when the tile is upscaled or over-zoomed rather than stored (key
       <button id="tab-search" class="tab active" role="tab">search</button>
       <button id="tab-saved" class="tab" role="tab">liked <span id="saved-count" class="badge"></span></button>
       <button id="tab-marks" class="tab" role="tab">marks <span id="marks-count" class="badge"></span></button>
+      <button id="tab-help" class="tab tab-narrow" role="tab" title="what everything does (key: ?)">?</button>
     </div>
 
     <section id="pane-search" class="pane-body" role="tabpanel">
@@ -90,6 +91,93 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
       <div id="marks-empty" class="hint">Marks live on the map until you save them
         here. Saved sets are kept in this browser; click one to load it back,
         double-click a name to rename.</div>
+    </section>
+
+    <section id="pane-help" class="pane-body help" role="tabpanel" hidden>
+      <h3>The map</h3>
+      <dl>
+        <dt>drag</dt><dd>pan</dd>
+        <dt>wheel</dt><dd>zoom, one level per notch</dd>
+        <dt>click</dt><dd>show how that render was made, in the right pane</dd>
+        <dt>double-click</dt><dd>the full original image, stitched from the
+          lossless store rather than the archive's WebP</dd>
+      </dl>
+      <p class="hint">Zoom is bounded by what the archive holds — two levels
+        below its shallowest, one above its deepest. If ⛰ <b>build</b> is
+        marked stale, the pyramid is missing and zooming out is capped until
+        you build it.</p>
+
+      <h3>Top bar</h3>
+      <dl>
+        <dt>map</dt><dd>which archive; <kbd>1</kbd>–<kbd>9</kbd> switch. The view
+          is kept, so two renderings of the same index stay comparable</dd>
+        <dt>src</dt><dd><b>store</b> reads live from SQLite (a render appears the
+          moment it is saved); <b>archive</b> reads the .pmtiles itself — what
+          would be uploaded</dd>
+        <dt>tile grid</dt><dd>outline every tile</dd>
+        <dt>mark</dt><dd>the marking overlay — see below (<kbd>x</kbd>)</dd>
+        <dt>debug</dt><dd>per tile: <code>z/x/y</code>, map zoom, size and corner
+          lat/lng. The border says where the tile came from: blue stored, green
+          upscaled from a shallower level, amber over-zoomed past the deepest
+          (<kbd>d</kbd>)</dd>
+        <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
+          each one as it changes</dd>
+        <dt>⟳</dt><dd>refetch everything visible without moving (<kbd>r</kbd>)</dd>
+        <dt>⛰ build</dt><dd>build the zoom pyramid and re-serialize the archive</dd>
+      </dl>
+
+      <h3>search</h3>
+      <p>Title, tags and prompt; one result per render, not per tile.</p>
+      <dl>
+        <dt>click a result</dt><dd>frame that whole render</dd>
+        <dt>hover</dt><dd>outline it on the map</dd>
+        <dt><kbd>/</kbd></dt><dd>focus the box · <kbd>Esc</kbd> clears it</dd>
+      </dl>
+
+      <h3>liked</h3>
+      <p>Points of interest, kept in this browser.</p>
+      <dl>
+        <dt>+ tile</dt><dd>save the tile selected on the map (<kbd>s</kbd>)</dd>
+        <dt>drag a row</dt><dd>reorder · double-click a name to rename ·
+          <b>×</b> deletes</dd>
+        <dt>copy / paste</dt><dd>the whole list as JSON, to move it between
+          browsers</dd>
+        <dt>↗ / ⇄</dt><dd>the target is off screen / in another archive, which is
+          why hovering it seems to do nothing</dd>
+      </dl>
+
+      <h3>marks</h3>
+      <p>Triage: approve what you want, reject the rest. Turn <b>mark</b> on
+        first (<kbd>x</kbd>).</p>
+      <table class="keys">
+        <tr><th></th><th>shift</th><th>alt</th><th>ctrl</th></tr>
+        <tr><th>drag</th><td>approve a rectangle</td><td>reject it</td><td>deselect</td></tr>
+        <tr><th>click</th><td colspan="3">the same, on the whole render under the
+          cursor</td></tr>
+      </table>
+      <p class="hint">Approved renders get a green outline and nothing painted
+        over them; rejected ones are dimmed so they recede. <kbd>Esc</kbd> clears
+        every mark.</p>
+      <dl>
+        <dt>add</dt><dd>save the current marks as a named set; click a set to
+          load it back, double-click to rename</dd>
+        <dt>clear</dt><dd>clear the map's marks — saved sets are untouched</dd>
+        <dt>reject rest</dt><dd>reject every tile that <i>holds a render</i> and
+          is not marked yet: the last step of a pass</dd>
+        <dt>copy</dt><dd>the current marks as JSON</dd>
+        <dt>mark by search</dt><dd>approve or reject everything a query matches,
+          whole renders at a time</dd>
+      </dl>
+      <p class="hint">Sets live in this browser. A set remembers the zoom it was
+        made at and will not load onto a map that marks at a different
+        granularity.</p>
+
+      <h3>Everywhere</h3>
+      <dl>
+        <dt><kbd>b</kbd></dt><dd>hide/show this pane</dd>
+        <dt><kbd>?</kbd></dt><dd>this help</dd>
+        <dt><kbd>Esc</kbd></dt><dd>close the preview, else clear the marks</dd>
+      </dl>
     </section>
   </aside>
 

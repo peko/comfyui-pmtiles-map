@@ -554,6 +554,7 @@ el('source-picker').addEventListener('change', (ev) => {
 
 registerTab('search');
 registerTab('saved');
+registerTab('help');
 el('left-toggle').addEventListener('click', () => setLeft(el('left').classList.contains('hidden')));
 
 /* ------------------------------------------------------- navigate to a tile */
@@ -1203,6 +1204,7 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key === 's') { ev.preventDefault(); saveSelected(); setTab('saved'); return; }
   if (ev.key === 'b') { ev.preventDefault(); setLeft(el('left').classList.contains('hidden')); return; }
   if (ev.key === 'r') { ev.preventDefault(); reloadTiles(); return; }
+  if (ev.key === '?') { ev.preventDefault(); setLeft(true); setTab('help'); return; }
   if (ev.key === '/') {
     ev.preventDefault();
     setLeft(true);                   // focusing a hidden input does nothing useful

@@ -182,3 +182,27 @@ pre {
 #map.selecting .leaflet-container { cursor: crosshair; }
 #pane-marks input[type="search"] { margin: 10px 0 4px; }
 #pane-marks .actions { flex-wrap: wrap; }
+
+/* Help pane: a reference, so it is dense on purpose. */
+.tab-narrow { flex: 0 0 auto; padding-left: 12px; padding-right: 12px; }
+.help h3 {
+  margin: 16px 0 4px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--accent);
+}
+.help h3:first-child { margin-top: 0; }
+.help p { margin: 4px 0; }
+.help dl { margin: 4px 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+.help dt { color: var(--fg); font-size: 12px; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.help dd { margin: 0; color: var(--dim); white-space: normal; }
+.help kbd {
+  background: #2b3340; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 0 5px; font: 11px/1.6 ui-monospace, monospace;
+  color: var(--fg);
+}
+.help code { color: var(--accent); }
+.help .keys { border-collapse: collapse; margin: 6px 0; width: 100%; }
+.help .keys th {
+  color: var(--dim); font-weight: 500; text-align: left; font-size: 11px;
+  padding: 2px 6px 2px 0;
+}
+.help .keys td { color: var(--dim); padding: 2px 6px 2px 0; vertical-align: top; }

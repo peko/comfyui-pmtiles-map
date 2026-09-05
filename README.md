@@ -346,7 +346,12 @@ an epsilon or `floor`/`ceil` silently takes an extra row.
 | `b` | show/hide the left pane |
 | `r` | refetch every visible tile |
 | `x`, `d` | mark / per-tile debug overlay |
+| `?` | the help tab — every gesture and key, in the app |
 | `Esc` | clear the selection, or close the preview |
+
+The **?** tab in the left pane documents all of the above where you need it,
+rather than here: what each top-bar control does, the map gestures, and the
+per-tab actions for search, liked and marks.
 
 ## HTTP API
 
