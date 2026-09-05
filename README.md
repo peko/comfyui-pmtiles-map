@@ -219,18 +219,47 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 
 ### Selecting tiles, and seeing which level they came from
 
-Two canvas overlays, both off by default, toggled by the `select` and `debug`
+Two canvas overlays, both off by default, toggled by the `mark` and `debug`
 checkboxes in the top bar (`x` and `d`).
 
-**`select`** — shift-drag marks tiles, ctrl-drag marks a second group, alt-drag
-erases, `Esc` clears. The header then shows the count with `copy` (the
-coordinates as JSON) and `clear`.
+**`mark`** — triage tiles by dragging:
 
-Shift-drag is Leaflet's *box zoom* — zoom-to-rectangle, not a selection — and
-both cannot own the gesture, so `boxZoom` stands down while `select` is on and
-gets it back when it is off. Either overlay can also be set from the URL
-(`&select=1`, `&debug=1`), which wins over the stored preference, so a link can
-turn one on for someone whose last session had it off.
+| drag | | |
+|---|---|---|
+| **shift** | approve | green outline, nothing painted over the tile |
+| **alt** | reject | dimmed to 50% black, so it recedes |
+| **ctrl** | deselect | |
+
+`Esc` clears everything; the header shows the tally with `copy` (both groups as
+JSON) and `clear`. A tile is in one group or none, so marking a rejected tile
+approved moves it rather than stacking.
+
+The two are drawn in opposite ways deliberately. Rejecting means you want to see
+*less* of that render, which a bright highlight cannot express — dimming can.
+Approving means you want to keep looking at it, so the mark stays off the pixels
+entirely and only traces the region.
+
+Shift-drag is otherwise Leaflet's *box zoom* — zoom-to-rectangle, not a
+selection — and both cannot own the gesture, so `boxZoom` stands down while
+`mark` is on and gets it back when it is off. Either overlay can also be set
+from the URL (`&select=1`, `&debug=1`), which wins over the stored preference,
+so a link can turn one on for someone whose last session had it off.
+
+#### Outlining a region without a shape
+
+The textbook way to get an outline from a flat fill is `S - erode(S)`: draw the
+shape, intersect four translated copies with `source-in` to get the erosion,
+then subtract it with `destination-out`. It needs two scratch canvases and, more
+awkwardly, padding across tile borders — erosion near an edge depends on pixels
+that belong to the neighbouring tile.
+
+None of that is necessary when the mask is one pixel per tile. The boundary is
+then exactly *"a marked cell whose neighbour is not marked"*, so a single padded
+`getImageData` per tile yields every edge directly, at any zoom, with no
+cross-tile state. Each edge is inset by half the line width so the stroke lands
+inside its own tile instead of being clipped in half at the border, and the runs
+are extended by the same half so corners meet. Holes and concave shapes come out
+right for free, because the rule is local.
 
 The selection is not DOM: it lives in an off-screen canvas at **one pixel per
 tile**, and a `GridLayer` blits the matching crop into each visible tile with
@@ -264,7 +293,7 @@ an epsilon or `floor`/`ceil` silently takes an extra row.
 | `s` | save the selected tile to the liked list |
 | `b` | show/hide the left pane |
 | `r` | refetch every visible tile |
-| `x`, `d` | tile selection / per-tile debug overlay |
+| `x`, `d` | mark / per-tile debug overlay |
 | `Esc` | clear the selection, or close the preview |
 
 ## HTTP API

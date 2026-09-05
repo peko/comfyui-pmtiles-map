@@ -25,20 +25,35 @@
  * tiles: a selection is a UI affordance, not a reason to allocate a gigabyte. */
 const MASK_MAX_PX = 2048;
 
-const SELECT_COLORS = {
-  shift: 'rgba(124, 196, 255, .40)',   // the accent blue: plain "selected"
-  ctrl: 'rgba(126, 231, 135, .40)',    // a second, distinguishable group
+/* Two groups, drawn in opposite ways on purpose.
+ *
+ * `reject` dims what it covers, so a rejected tile recedes -- the point is to
+ * see *less* of it, which a bright highlight cannot do.  `approve` is an
+ * outline and paints nothing over the tile at all, because the whole reason to
+ * approve a render is to keep looking at it.
+ *
+ * A tile belongs to at most one group, so they get a canvas each: `reject` can
+ * then be blitted with one drawImage like any fill, while `approve` needs its
+ * own pixels to trace a boundary from. */
+const GROUPS = {
+  reject: { stored: 'rgba(0, 0, 0, .5)', fill: true },
+  approve: { stored: 'rgba(126, 231, 135, 1)', stroke: 'rgba(126, 231, 135, .95)' },
 };
+const GROUP_KEYS = Object.keys(GROUPS);
+const OUTLINE_PX = 2;
 
 const overlay = {
-  mask: null,
-  maskCtx: null,
+  masks: null,                    // { reject: {canvas, ctx}, approve: {...} }
   maskZ: null,
   select: null,
   debug: null,
-  count: 0,
+  counts: { reject: 0, approve: 0 },
   on: { select: false, debug: false },
 };
+
+Object.defineProperty(overlay, 'count', {
+  get: () => overlay.counts.reject + overlay.counts.approve,
+});
 
 /* ------------------------------------------------------------------- mask */
 
@@ -50,22 +65,28 @@ function maskZoomFor(info) {
 
 function ensureMask(info) {
   const want = maskZoomFor(info);
-  if (overlay.mask && overlay.maskZ === want) return false;
+  if (overlay.masks && overlay.maskZ === want) return false;
   // Reallocating only when the granularity changes is what lets a selection
   // survive an archive switch: two maps built from the same manifest have the
   // same max_zoom, and the same coordinate means the same render in both, so
   // keeping the mask is the whole point of switching.
-  overlay.mask = document.createElement('canvas');
-  overlay.mask.width = overlay.mask.height = 1 << want;
-  overlay.maskCtx = overlay.mask.getContext('2d', { willReadFrequently: true });
+  overlay.masks = {};
+  for (const key of GROUP_KEYS) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1 << want;
+    overlay.masks[key] = {
+      canvas,
+      ctx: canvas.getContext('2d', { willReadFrequently: true }),
+    };
+    overlay.counts[key] = 0;
+  }
   overlay.maskZ = want;
-  overlay.count = 0;
   return true;
 }
 
-function countPainted(x, y, w, h) {
+function countPainted(ctx, x, y, w, h) {
   if (w <= 0 || h <= 0) return 0;
-  const data = overlay.maskCtx.getImageData(x, y, w, h).data;
+  const data = ctx.getImageData(x, y, w, h).data;
   let n = 0;
   for (let i = 3; i < data.length; i += 4) if (data[i]) n += 1;
   return n;
@@ -89,8 +110,8 @@ function tileSpan(nw, se) {
   ];
 }
 
-/** Paint (or erase) a rectangle of tiles, in mask pixels. */
-function paintTiles(x0, y0, x1, y1, color) {
+/** Paint a rectangle of tiles into one group, or erase it from all of them. */
+function paintTiles(x0, y0, x1, y1, group) {
   const side = 1 << overlay.maskZ;
   const x = Math.max(0, Math.min(side, x0));
   const y = Math.max(0, Math.min(side, y0));
@@ -98,40 +119,49 @@ function paintTiles(x0, y0, x1, y1, color) {
   const h = Math.max(0, Math.min(side, y1) - y);
   if (!w || !h) return;
 
-  const ctx = overlay.maskCtx;
-  overlay.count -= countPainted(x, y, w, h);
-  // Clear first, then fill: painting a translucent colour over an existing one
-  // would accumulate alpha, so re-selecting a region would keep darkening it.
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.fillStyle = '#000';
-  ctx.fillRect(x, y, w, h);
-  if (color) {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = color;
+  // Clear from every group first: a tile is in one group or none, so marking a
+  // rejected tile approved has to move it rather than stack. It is also what
+  // stops a re-marked region accumulating alpha, the fill being translucent.
+  for (const key of GROUP_KEYS) {
+    const { ctx } = overlay.masks[key];
+    overlay.counts[key] -= countPainted(ctx, x, y, w, h);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = '#000';
     ctx.fillRect(x, y, w, h);
-    overlay.count += w * h;
+    ctx.globalCompositeOperation = 'source-over';
   }
-  ctx.globalCompositeOperation = 'source-over';
+  if (group) {
+    const { ctx } = overlay.masks[group];
+    ctx.fillStyle = GROUPS[group].stored;
+    ctx.fillRect(x, y, w, h);
+    overlay.counts[group] += w * h;
+  }
   if (overlay.select) overlay.select.redraw();
   renderSelectionInfo();
 }
 
 function clearSelection() {
-  if (!overlay.mask) return;
-  overlay.maskCtx.clearRect(0, 0, overlay.mask.width, overlay.mask.height);
-  overlay.count = 0;
+  if (!overlay.masks) return;
+  for (const key of GROUP_KEYS) {
+    const { canvas, ctx } = overlay.masks[key];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    overlay.counts[key] = 0;
+  }
   if (overlay.select) overlay.select.redraw();
   renderSelectionInfo();
 }
 
-/** Every selected tile, as archive coordinates at the mask's zoom. */
+/** Every marked tile, by group, as archive coordinates at the mask's zoom. */
 function selectedTiles() {
-  if (!overlay.mask || !overlay.count) return [];
-  const side = 1 << overlay.maskZ;
-  const data = overlay.maskCtx.getImageData(0, 0, side, side).data;
-  const out = [];
-  for (let i = 0, p = 3; p < data.length; p += 4, i += 1) {
-    if (data[p]) out.push({ z: overlay.maskZ, x: i % side, y: (i / side) | 0 });
+  const out = {};
+  for (const key of GROUP_KEYS) {
+    out[key] = [];
+    if (!overlay.masks || !overlay.counts[key]) continue;
+    const side = 1 << overlay.maskZ;
+    const data = overlay.masks[key].ctx.getImageData(0, 0, side, side).data;
+    for (let i = 0, p = 3; p < data.length; p += 4, i += 1) {
+      if (data[p]) out[key].push({ z: overlay.maskZ, x: i % side, y: (i / side) | 0 });
+    }
   }
   return out;
 }
@@ -152,6 +182,81 @@ function gridOptions(zIndex) {
   };
 }
 
+/** Blit a group's mask into the tile as a flat fill. */
+function drawFill(ctx, mask, sx, sy, span, size) {
+  if (span >= 1) {
+    ctx.drawImage(mask.canvas, sx, sy, span, span, 0, 0, size.x, size.y);
+    return;
+  }
+  // Below one mask pixel per tile a fractional source rect is at the mercy of
+  // the browser's sampling; read the pixel and fill instead.
+  const px = mask.ctx.getImageData(Math.floor(sx), Math.floor(sy), 1, 1).data;
+  if (!px[3]) return;
+  ctx.fillStyle = `rgba(${px[0]},${px[1]},${px[2]},${px[3] / 255})`;
+  ctx.fillRect(0, 0, size.x, size.y);
+}
+
+/** Trace the boundary of a group's marked cells and stroke it.
+ *
+ * The general recipe for an outline from a flat fill is `S - erode(S)`: draw
+ * the shape, intersect four translated copies with `source-in` to get the
+ * erosion, then subtract it with `destination-out`. That needs two scratch
+ * canvases and, worse, padding across tile borders -- erosion near an edge
+ * depends on pixels belonging to the neighbouring tile.
+ *
+ * None of that is necessary when the mask is one pixel per tile: the boundary
+ * is exactly "a marked cell whose neighbour is not marked", so one padded
+ * getImageData per tile gives every edge directly. Each edge is inset by half
+ * the line width so the stroke lands inside its own tile instead of being
+ * clipped in half at the border.
+ */
+function drawOutline(ctx, mask, sx, sy, span, size, color) {
+  const side = 1 << overlay.maskZ;
+  const first = Math.floor(sx);
+  const last = Math.ceil(sx + span) - 1;
+  const firstY = Math.floor(sy);
+  const lastY = Math.ceil(sy + span) - 1;
+  const w = last - first + 3;                  // one cell of padding each side
+  const h = lastY - firstY + 3;
+  const ox = first - 1;
+  const oy = firstY - 1;
+
+  // getImageData clamps to the canvas, so read the overlap and index by hand;
+  // anything outside the mask counts as unmarked, which is what makes the
+  // outline close along the edge of the world.
+  const rx = Math.max(0, ox);
+  const ry = Math.max(0, oy);
+  const rw = Math.min(side, ox + w) - rx;
+  const rh = Math.min(side, oy + h) - ry;
+  if (rw <= 0 || rh <= 0) return;
+  const data = mask.ctx.getImageData(rx, ry, rw, rh).data;
+  const at = (mx, my) => {
+    if (mx < rx || my < ry || mx >= rx + rw || my >= ry + rh) return false;
+    return data[((my - ry) * rw + (mx - rx)) * 4 + 3] !== 0;
+  };
+
+  const scale = size.x / span;                 // tile pixels per mask cell
+  const half = OUTLINE_PX / 2;
+  ctx.beginPath();
+  for (let my = firstY; my <= lastY; my += 1) {
+    for (let mx = first; mx <= last; mx += 1) {
+      if (!at(mx, my)) continue;
+      const x0 = (mx - sx) * scale;
+      const y0 = (my - sy) * scale;
+      const x1 = x0 + scale;
+      const y1 = y0 + scale;
+      // Extend each run by `half` so the corners meet instead of leaving a nick.
+      if (!at(mx, my - 1)) { ctx.moveTo(x0 - half, y0 + half); ctx.lineTo(x1 + half, y0 + half); }
+      if (!at(mx, my + 1)) { ctx.moveTo(x0 - half, y1 - half); ctx.lineTo(x1 + half, y1 - half); }
+      if (!at(mx - 1, my)) { ctx.moveTo(x0 + half, y0 - half); ctx.lineTo(x0 + half, y1 + half); }
+      if (!at(mx + 1, my)) { ctx.moveTo(x1 - half, y0 - half); ctx.lineTo(x1 - half, y1 + half); }
+    }
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = OUTLINE_PX;
+  ctx.stroke();
+}
+
 function makeSelectLayer() {
   const Layer = L.GridLayer.extend({
     createTile(coords) {
@@ -159,7 +264,7 @@ function makeSelectLayer() {
       const size = this.getTileSize();
       tile.width = size.x;
       tile.height = size.y;
-      if (!overlay.mask) return tile;
+      if (!overlay.masks) return tile;
       const ctx = tile.getContext('2d');
       ctx.imageSmoothingEnabled = false;
 
@@ -170,16 +275,12 @@ function makeSelectLayer() {
       const sy = coords.y * span;
       const side = 1 << overlay.maskZ;
       if (sx >= side || sy >= side || sx < 0 || sy < 0) return tile;
-      if (span >= 1) {
-        ctx.drawImage(overlay.mask, sx, sy, span, span, 0, 0, size.x, size.y);
-      } else {
-        // Below one mask pixel per tile a fractional source rect is at the
-        // mercy of the browser's sampling; read the pixel and fill instead.
-        const px = overlay.maskCtx.getImageData(
-          Math.floor(sx), Math.floor(sy), 1, 1).data;
-        if (px[3]) {
-          ctx.fillStyle = `rgba(${px[0]},${px[1]},${px[2]},${px[3] / 255})`;
-          ctx.fillRect(0, 0, size.x, size.y);
+      for (const key of GROUP_KEYS) {
+        if (!overlay.counts[key]) continue;
+        const group = GROUPS[key];
+        if (group.fill) drawFill(ctx, overlay.masks[key], sx, sy, span, size);
+        if (group.stroke) {
+          drawOutline(ctx, overlay.masks[key], sx, sy, span, size, group.stroke);
         }
       }
       return tile;
@@ -284,16 +385,14 @@ const BoxSelector = L.Map.BoxZoom.extend({
 map.boxSelector = new BoxSelector(map);
 
 map.on('boxselectend', (ev) => {
-  if (!overlay.on.select || !overlay.mask) return;
-  // alt erases; shift and ctrl paint two distinguishable groups.
-  const color = ev.alt ? null
-    : ev.ctrl ? SELECT_COLORS.ctrl
-      : SELECT_COLORS.shift;
+  if (!overlay.on.select || !overlay.masks) return;
+  // shift approves (outlined), alt rejects (dimmed), ctrl deselects.
+  const group = ev.ctrl ? null : ev.alt ? 'reject' : 'approve';
   // Tile indices at the mask's zoom. TILE_PX is Leaflet's 256 whatever the
   // archive's tile size -- the same rule as blockBounds in viewer.js.
   const nw = map.project(ev.bounds.getNorthWest(), overlay.maskZ);
   const se = map.project(ev.bounds.getSouthEast(), overlay.maskZ);
-  paintTiles(...tileSpan(nw, se), color);
+  paintTiles(...tileSpan(nw, se), group);
 });
 
 /* --------------------------------------------------------------------- ui */
@@ -303,10 +402,12 @@ function renderSelectionInfo() {
   if (!box) return;
   box.hidden = !overlay.on.select || !overlay.count;
   const label = el('sel-count');
-  if (label) {
-    const each = overlay.maskZ === (state.meta || {}).max_zoom ? 'tile' : 'cell';
-    label.textContent = `${overlay.count} ${each}${overlay.count === 1 ? '' : 's'}`;
-  }
+  if (!label) return;
+  const each = overlay.maskZ === (state.meta || {}).max_zoom ? 'tile' : 'cell';
+  const parts = GROUP_KEYS
+    .filter((k) => overlay.counts[k])
+    .map((k) => `${overlay.counts[k]} ${k === 'reject' ? 'rejected' : 'approved'}`);
+  label.textContent = `${parts.join(' · ')} ${each}${overlay.count === 1 ? '' : 's'}`;
 }
 
 /* Present in the URL wins over the stored preference, absent falls back to it --
@@ -367,9 +468,8 @@ el('select-toggle').addEventListener('change', (ev) => setOverlay('select', ev.t
 el('debug-toggle').addEventListener('change', (ev) => setOverlay('debug', ev.target.checked));
 el('sel-clear').addEventListener('click', clearSelection);
 el('sel-copy').addEventListener('click', () => {
-  const tiles = selectedTiles();
   navigator.clipboard.writeText(JSON.stringify(
-    { map: state.name, zoom: overlay.maskZ, tiles }, null, 2)).then(() => {
+    { map: state.name, zoom: overlay.maskZ, ...selectedTiles() }, null, 2)).then(() => {
     const btn = el('sel-copy');
     btn.textContent = 'copied';
     setTimeout(() => { btn.textContent = 'copy'; }, 900);
