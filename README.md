@@ -226,15 +226,16 @@ checkboxes in the top bar (`x` and `d`).
 
 | drag | | |
 |---|---|---|
-| **shift** | approve | white outline with an outward shadow, nothing painted over the tile |
+| **shift** | approve | green outline with an outward shadow, nothing painted over the tile |
 | **alt** | reject | dimmed to 62.5% black, so it recedes |
 | **ctrl** | deselect | |
 
 The three numbers worth tuning are constants at the top of `overlays.js`:
-`GROUPS.reject.stored` (the dimming, `.625`), `SHADOW_COLOR` (`rgba(0,0,0,1)`)
-and `SHADOW_BLUR` (`36`). Measured on the rendered canvas, that shadow is alpha
-125 one pixel out, 49 at sixteen, and gone by forty — while the approved region
-itself stays at exactly 0.
+`GROUPS.reject.stored` (the dimming, `.625`), `OUTLINE_PX` (`3`),
+`SHADOW_COLOR` (`rgba(0,0,0,1)`) and `SHADOW_BLUR` (`36`). A perpendicular scan
+across an approved edge, measured on the rendered canvas, reads: shadow ramping
+to alpha 125 just outside, then exactly three pixels of `(126, 230, 134)`, then
+nothing at all over the render itself.
 
 `Esc` clears everything; the header shows the tally with `copy` (both groups as
 JSON) and `clear`. A tile is in one group or none, so marking a rejected tile

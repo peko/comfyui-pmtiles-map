@@ -37,13 +37,13 @@ const MASK_MAX_PX = 2048;
  * own pixels to trace a boundary from. */
 const GROUPS = {
   reject: { stored: 'rgba(0, 0, 0, .625)', fill: true },
-  approve: { stored: 'rgba(255, 255, 255, 1)', stroke: 'rgba(255, 255, 255, .95)' },
+  approve: { stored: 'rgba(126, 231, 135, 1)', stroke: 'rgba(126, 231, 135, .95)' },
 };
 const GROUP_KEYS = Object.keys(GROUPS);
-const OUTLINE_PX = 2;
+const OUTLINE_PX = 3;
 /* A drop shadow thrown *outward* from the approved region, so the outline reads
- * as raised off the map rather than drawn on it -- and so a white line stays
- * legible over a pale render, which it would not on its own. */
+ * as raised off the map rather than drawn on it -- and so the line stays
+ * legible over a pale render, which on its own it would not be. */
 const SHADOW_COLOR = 'rgba(0, 0, 0, 1)';
 const SHADOW_BLUR = 36;
 
