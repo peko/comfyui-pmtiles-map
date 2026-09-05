@@ -226,9 +226,12 @@ checkboxes in the top bar (`x` and `d`).
 
 | drag | | |
 |---|---|---|
-| **shift** | approve | green outline, nothing painted over the tile |
-| **alt** | reject | dimmed to 50% black, so it recedes |
+| **shift** | approve | white outline with an outward shadow, nothing painted over the tile |
+| **alt** | reject | dimmed to 62.5% black, so it recedes |
 | **ctrl** | deselect | |
+
+The three numbers worth tuning are constants at the top of `overlays.js`:
+`GROUPS.reject.stored` (the dimming), `SHADOW_COLOR` and `SHADOW_BLUR`.
 
 `Esc` clears everything; the header shows the tally with `copy` (both groups as
 JSON) and `clear`. A tile is in one group or none, so marking a rejected tile
@@ -283,7 +286,17 @@ then subtract it with `destination-out`. It needs two scratch canvases and, more
 awkwardly, padding across tile borders — erosion near an edge depends on pixels
 that belong to the neighbouring tile.
 
-None of that is necessary when the mask is one pixel per tile. The boundary is
+The shadow, on the other hand, *is* the generic canvas drop shadow — used the
+way round that gets it outside only. Clip to everything outside the region, then
+fill the region with `shadowBlur` on: the fill lands entirely in the clip's hole
+and is discarded, and only the part of its shadow that spilled outwards
+survives. The approved render underneath stays completely untouched, which a
+symmetric glow would not manage. The shape is built over a padded range of cells
+— `ceil(SHADOW_BLUR / scale)` of them — so the blur runs continuously across a
+tile border instead of stopping dead at the seam and drawing a shadow along a
+boundary that is not one.
+
+None of that is necessary for the outline when the mask is one pixel per tile. The boundary is
 then exactly *"a marked cell whose neighbour is not marked"*, so a single padded
 `getImageData` per tile yields every edge directly, at any zoom, with no
 cross-tile state. Each edge is inset by half the line width so the stroke lands

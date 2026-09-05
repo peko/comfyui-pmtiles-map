@@ -36,11 +36,16 @@ const MASK_MAX_PX = 2048;
  * then be blitted with one drawImage like any fill, while `approve` needs its
  * own pixels to trace a boundary from. */
 const GROUPS = {
-  reject: { stored: 'rgba(0, 0, 0, .5)', fill: true },
-  approve: { stored: 'rgba(126, 231, 135, 1)', stroke: 'rgba(126, 231, 135, .95)' },
+  reject: { stored: 'rgba(0, 0, 0, .625)', fill: true },
+  approve: { stored: 'rgba(255, 255, 255, 1)', stroke: 'rgba(255, 255, 255, .95)' },
 };
 const GROUP_KEYS = Object.keys(GROUPS);
 const OUTLINE_PX = 2;
+/* A drop shadow thrown *outward* from the approved region, so the outline reads
+ * as raised off the map rather than drawn on it -- and so a white line stays
+ * legible over a pale render, which it would not on its own. */
+const SHADOW_COLOR = 'rgba(0, 0, 0, .55)';
+const SHADOW_BLUR = 12;
 
 const overlay = {
   masks: null,                    // { reject: {canvas, ctx}, approve: {...} }
@@ -225,10 +230,15 @@ function drawOutline(ctx, mask, sx, sy, span, size, color) {
   const last = Math.ceil(sx + span) - 1;
   const firstY = Math.floor(sy);
   const lastY = Math.ceil(sy + span) - 1;
-  const w = last - first + 3;                  // one cell of padding each side
-  const h = lastY - firstY + 3;
-  const ox = first - 1;
-  const oy = firstY - 1;
+  // Pad by enough cells to cover the blur, not just one: the shadow shape has to
+  // continue past the tile edge or the blur stops dead at the seam and draws a
+  // shadow along a boundary that is not one.
+  const scale = size.x / span;                 // tile pixels per mask cell
+  const pad = Math.max(1, Math.ceil(SHADOW_BLUR / scale));
+  const w = last - first + 1 + 2 * pad;
+  const h = lastY - firstY + 1 + 2 * pad;
+  const ox = first - pad;
+  const oy = firstY - pad;
 
   // getImageData clamps to the canvas, so read the overlap and index by hand;
   // anything outside the mask counts as unmarked, which is what makes the
@@ -244,7 +254,36 @@ function drawOutline(ctx, mask, sx, sy, span, size, color) {
     return data[((my - ry) * rw + (mx - rx)) * 4 + 3] !== 0;
   };
 
-  const scale = size.x / span;                 // tile pixels per mask cell
+  /* The marked cells as a path, over the padded range so the shape -- and so the
+   * blur -- runs continuously across tile borders. */
+  const addShape = () => {
+    for (let my = firstY - pad; my <= lastY + pad; my += 1) {
+      for (let mx = first - pad; mx <= last + pad; mx += 1) {
+        if (at(mx, my)) {
+          ctx.rect((mx - sx) * scale, (my - sy) * scale, scale, scale);
+        }
+      }
+    }
+  };
+
+  /* Outer shadow, the standard way round: clip to everything *outside* the
+   * shape, then fill the shape with a shadow on. The fill itself lands entirely
+   * inside the clip's hole and is discarded -- only the part of its shadow that
+   * spilled outwards survives, which is exactly the halo wanted and leaves the
+   * approved render itself untouched. */
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, size.x, size.y);
+  addShape();
+  ctx.clip('evenodd');
+  ctx.shadowColor = SHADOW_COLOR;
+  ctx.shadowBlur = SHADOW_BLUR;
+  ctx.fillStyle = '#000';                      // never seen; only its shadow is
+  ctx.beginPath();
+  addShape();
+  ctx.fill();
+  ctx.restore();
+
   const half = OUTLINE_PX / 2;
   ctx.beginPath();
   for (let my = firstY; my <= lastY; my += 1) {
