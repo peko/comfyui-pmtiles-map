@@ -28,6 +28,25 @@ from PIL import Image
 LEAF = "leaf"
 DERIVED = "derived"
 
+# How a pyramid level is built from the one below it.
+#
+#   scale   average all four children into one tile -- the classic pyramid, and
+#           correct right up until the content is too small to read
+#   sample  once averaging would take the content under MIN_CONTENT_PX, build
+#           the tile from a QUARTER OF EACH child instead: 1/4 + 1/4 + 1/4 + 1/4,
+#           cropped at 1:1 and never resampled. Four unreadable images average
+#           to noise -- the dead-channel look -- whereas four quarter-windows
+#           stay legible, and every child still contributes rather than one
+#           being picked over its siblings.
+PYRAMID_SCALE = "scale"
+PYRAMID_SAMPLE = "sample"
+PYRAMID_MODES = (PYRAMID_SAMPLE, PYRAMID_SCALE)
+
+# One leaf tile's content occupies `tile_size >> (leaf_zoom - z)` pixels at
+# level z. At 512 px tiles: 512, 256, 128, 64, then 32 -- which is where a
+# render stops being an image and starts being a smudge.
+MIN_CONTENT_PX = 64
+
 _TILE_WEBP_DDL = """
 CREATE TABLE IF NOT EXISTS tile_webp (
     z    INTEGER NOT NULL,
@@ -809,12 +828,61 @@ class TileStore:
 
     # ---------------------------------------------------------------- pyramid
 
-    def recompose_ancestors(self, coords, min_zoom=0):
+    def leaf_zoom(self):
+        """Deepest level holding real renders, or None if the map is empty."""
+        row = self.db.execute(
+            "SELECT max(z) FROM tiles WHERE kind = ?", (LEAF,)
+        ).fetchone()
+        return None if row is None or row[0] is None else int(row[0])
+
+    def pyramid_settings(self, mode=None, min_px=None):
+        """Resolve the build settings, remembering them on the map.
+
+        Stated once -- by the node, the CLI or the importer -- and every later
+        rebuild (the viewer's build button included) uses the same rule without
+        being told again, exactly as `store_format` works.
+        """
+        if mode is None:
+            mode = self.get_map_meta("pyramid_mode", PYRAMID_SAMPLE)
+        elif mode not in PYRAMID_MODES:
+            raise ValueError(f"pyramid mode must be one of {PYRAMID_MODES}")
+        else:
+            self.set_map_meta("pyramid_mode", mode)
+        if min_px is None:
+            min_px = int(self.get_map_meta("pyramid_min_px", MIN_CONTENT_PX))
+        else:
+            min_px = max(1, int(min_px))
+            self.set_map_meta("pyramid_min_px", str(min_px))
+        return (mode if mode in PYRAMID_MODES else PYRAMID_SAMPLE), min_px
+
+    def _scales_at(self, z, leaf_zoom, mode, min_px):
+        """Should level `z` average its four children, or sample one of them?
+
+        Each averaged level halves the content, so one leaf tile's worth of
+        image occupies `tile_size >> (leaf_zoom - z)` pixels at level z.  Once
+        that drops below `min_px` the average is of four things too small to
+        read, and four unreadable images average to noise -- the dead-channel
+        look.  Below the floor `sample` crops a quarter out of each child
+        instead and tiles the four together, so the scale stops shrinking.
+
+        The trade is coverage, not resolution: each level past the floor shows
+        a quarter of the area at the same size.  That is inherent -- constant
+        scale and a shrinking share of the map cannot both hold -- but taking a
+        quarter of all four children rather than one child whole keeps every
+        branch of the tree represented.
+        """
+        if mode == PYRAMID_SCALE or leaf_zoom is None or z >= leaf_zoom:
+            return True
+        return (self.tile_size >> (leaf_zoom - z)) >= min_px
+
+    def recompose_ancestors(self, coords, min_zoom=0, mode=None, min_px=None):
         """Rebuild every ancestor of `coords` down to min_zoom.
 
         Returns the list of (z, x, y) that were written.  Ancestors are deduped
         per level, so a 4x4 slice does one chain of work, not sixteen.
         """
+        mode, min_px = self.pyramid_settings(mode, min_px)
+        leaf = self.leaf_zoom()
         written = []
         level = {(z, x, y) for z, x, y in coords}
         while True:
@@ -826,12 +894,13 @@ class TileStore:
                 break
             parents = {(z - 1, x >> 1, y >> 1) for zz, x, y in level if zz == z}
             for pz, px, py in sorted(parents):
-                if self._recompose(pz, px, py):
+                if self._recompose(pz, px, py, leaf, mode, min_px):
                     written.append((pz, px, py))
             level = {c for c in level if c[0] != z} | parents
         return written
 
-    def _recompose(self, z, x, y):
+    def _recompose(self, z, x, y, leaf_zoom=None, mode=PYRAMID_SCALE,
+                   min_px=MIN_CONTENT_PX):
         """Rebuild one tile from its (up to four) children.  True if written."""
         row = self.db.execute(
             "SELECT kind FROM tiles WHERE z=? AND x=? AND y=?", (z, x, y)
@@ -841,7 +910,41 @@ class TileStore:
             # its children; clobbering it would silently discard a real image.
             return False
         ts = self.tile_size
+
         half = ts // 2
+
+        if not self._scales_at(z, leaf_zoom, mode, min_px):
+            # Every child contributes a quarter of itself, at 1:1. Same four
+            # destinations as the averaging path, but a *crop* instead of a
+            # resize -- so the content never shrinks, and all four children are
+            # represented rather than one being chosen over its siblings.
+            #
+            # Each child gives up its matching quadrant (NW child -> NW corner),
+            # which keeps content where the eye expects it and spreads the four
+            # windows as widely as possible over the area the tile stands for.
+            canvas = None
+            n_children = 0
+            for dx in (0, 1):
+                for dy in (0, 1):
+                    child = self.get_image(z + 1, x * 2 + dx, y * 2 + dy)
+                    if child is None:
+                        continue
+                    child = child.convert("RGBA")
+                    if child.size != (ts, ts):
+                        child = child.resize((ts, ts), Image.LANCZOS)
+                    if canvas is None:
+                        canvas = Image.new("RGBA", (ts, ts), (0, 0, 0, 0))
+                    box = (dx * half, dy * half, dx * half + half, dy * half + half)
+                    canvas.paste(child.crop(box), (dx * half, dy * half))
+                    n_children += 1
+            if canvas is None:
+                self.delete_tile(z, x, y)
+                return False
+            self.put_tile(z, x, y, canvas, kind=DERIVED,
+                          meta={"kind": DERIVED, "children": n_children,
+                                "sampled": True})
+            return True
+
         canvas = None
         n_children = 0
         for dx in (0, 1):
@@ -865,7 +968,7 @@ class TileStore:
                       meta={"kind": DERIVED, "children": n_children})
         return True
 
-    def rebuild_pyramid(self, min_zoom=0, progress=None):
+    def rebuild_pyramid(self, min_zoom=0, progress=None, mode=None, min_px=None):
         """Recompose every derived level from scratch, bottom-up, once each.
 
         This is the cheap way to get a pyramid. Recomposing on every save costs
@@ -886,6 +989,7 @@ class TileStore:
         if not leaves:
             return []
         maxz = max(z for z, _, _ in leaves)
+        mode, min_px = self.pyramid_settings(mode, min_px)
         self.db.execute(
             "DELETE FROM tiles WHERE kind = ? AND z < ?", (DERIVED, maxz)
         )
@@ -894,7 +998,7 @@ class TileStore:
         for z in range(maxz, min_zoom, -1):
             parents = sorted({(z - 1, x >> 1, y >> 1) for zz, x, y in level if zz == z})
             for i, (pz, px, py) in enumerate(parents):
-                if self._recompose(pz, px, py):
+                if self._recompose(pz, px, py, maxz, mode, min_px):
                     written.append((pz, px, py))
                 if progress and (i % 256 == 0 or i + 1 == len(parents)):
                     progress(pz, i + 1, len(parents))

@@ -51,6 +51,14 @@ def main():
     ap.add_argument("--info", metavar="MAP")
     ap.add_argument("--rebuild", metavar="MAP")
     ap.add_argument("--rebuild-pyramid", metavar="MAP")
+    ap.add_argument("--pyramid-mode", choices=list(tilestore.PYRAMID_MODES),
+                    default=None,
+                    help="scale: average four children into one tile. sample "
+                         "(the default): do that only while the content stays "
+                         "above --pyramid-min-px, then keep one child whole. "
+                         "Remembered on the map once given.")
+    ap.add_argument("--pyramid-min-px", type=int, default=None,
+                    help=f"floor for `sample` (default {tilestore.MIN_CONTENT_PX})")
     ap.add_argument("--dump", nargs=5, metavar=("MAP", "Z", "X", "Y", "OUT"))
     ap.add_argument("--refresh-meta", metavar="MAP",
                     help="re-derive each tile's metadata from its stored "
@@ -81,7 +89,8 @@ def main():
     if args.rebuild_pyramid:
         db, _ = map_files(args.rebuild_pyramid, args.maps_dir)
         with tilestore.TileStore(db) as store:
-            written = store.rebuild_pyramid()
+            written = store.rebuild_pyramid(mode=args.pyramid_mode,
+                                            min_px=args.pyramid_min_px)
             store.db.commit()
         print(f"recomposed {len(written)} derived tiles")
         return

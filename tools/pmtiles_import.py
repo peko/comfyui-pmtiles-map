@@ -312,6 +312,13 @@ def parse_args(argv=None):
                          "top-left tile only, which is all search() reads and "
                          "is what keeps the archive under its metadata budget")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("--pyramid-mode", default=None,
+                    choices=list(tilestore.PYRAMID_MODES),
+                    help="scale: average four children into one tile. sample "
+                         "(the default): only while the content stays above "
+                         "--pyramid-min-px, then keep one child whole")
+    ap.add_argument("--pyramid-min-px", type=int, default=None,
+                    help=f"floor for `sample` (default {tilestore.MIN_CONTENT_PX})")
 
     ap.add_argument("--title-from", default="stem", choices=("stem", "name", "path"))
     ap.add_argument("--tags", default=None, help="extra tags, comma separated")
@@ -579,7 +586,8 @@ def run_import(store, db_path, pmt_path, name, root, rels, layout, pad_color,
         def on_level(level, done, total):
             progress(f"pyramid z{level}", done, total, t0)
 
-        made = store.rebuild_pyramid(progress=on_level)
+        made = store.rebuild_pyramid(progress=on_level, mode=args.pyramid_mode,
+                                     min_px=args.pyramid_min_px)
         store.db.commit()
         say(f"\npyramid     {len(made)} tiles in {clock(time.time() - t0)}")
     elif args.pyramid:

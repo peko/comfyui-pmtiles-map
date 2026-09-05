@@ -130,6 +130,25 @@ class SavePMTilesMap:
             # minimum size. Both are meant to be *wired* from whatever builds the
             # string, and a wired widget draws no editor at all.
             "optional": {
+                "pyramid_mode": (list(tilestore.PYRAMID_MODES),
+                                 {"default": tilestore.PYRAMID_SAMPLE,
+                                  "tooltip": "how a zoom level is built from the one "
+                                             "below. `scale` averages all four "
+                                             "children into one tile -- the classic "
+                                             "pyramid. `sample` does that only while "
+                                             "the content stays above pyramid_min_px, "
+                                             "then keeps ONE child whole instead: "
+                                             "four unreadable renders average to "
+                                             "noise, so past that point a quarter as "
+                                             "many legible ones per level is the "
+                                             "better trade."}),
+                "pyramid_min_px": ("INT", {"default": tilestore.MIN_CONTENT_PX,
+                                   "min": 1, "max": 1024,
+                                   "tooltip": "the floor for `sample`: one leaf "
+                                              "tile's content occupies "
+                                              "tile_size >> (leaf_zoom - z) pixels at "
+                                              "level z, and averaging stops once that "
+                                              "would go under this."}),
                 "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
                                   "tooltip": "batch the archive rewrite: serialize "
                                              "only once at least this many tiles are "
@@ -170,6 +189,7 @@ class SavePMTilesMap:
              webp_quality, store_format, store_quality, pyramid_to_zoom, y_scheme,
              write_archive, embed_tile_metadata, store_full_prompt, title, tags,
              archive_every=0, preview="thumbnail", prompt_text="", negative_text="",
+             pyramid_mode=None, pyramid_min_px=None,
              prompt=None, extra_pnginfo=None):
         name = safe_map_name(map_name)
         ts = int(tile_size)
@@ -233,7 +253,9 @@ class SavePMTilesMap:
                 lines.append(f"image {index}: {how} -> {nx}x{ny} tile(s) at "
                              f"z={z} x={x0} y={y0}")
 
-            derived = store.recompose_ancestors(placed, min_zoom=pyramid_to_zoom)
+            derived = store.recompose_ancestors(
+                placed, min_zoom=pyramid_to_zoom,
+                mode=pyramid_mode, min_px=pyramid_min_px)
             if pyramid_to_zoom >= z:
                 # Nothing was recomposed: the coarse levels are missing, and the
                 # viewer should offer to build them rather than pretend the map is

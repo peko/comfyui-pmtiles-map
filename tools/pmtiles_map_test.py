@@ -149,7 +149,11 @@ def build_synthetic(db_path, ts=256, z=4, side=4):
     store.put_tile(z, side + 2, side + 2, numbered_tile(ts, (255, 255, 255), "lonely"),
                    kind=tilestore.LEAF, meta={"kind": "leaf", "prompt": "lonely"})
     coords.append((z, side + 2, side + 2))
-    derived = store.recompose_ancestors(coords, min_zoom=0)
+    # Explicitly the classic averaging pyramid: sections 1, 4 and 5 assert the
+    # four-children-in-quadrants layout, which is what `scale` means. `sample`,
+    # now the default, is section 22's business.
+    derived = store.recompose_ancestors(coords, min_zoom=0,
+                                        mode=tilestore.PYRAMID_SCALE)
     store.db.commit()
     return store, coords, expected, derived
 
@@ -670,7 +674,7 @@ def main():
         st = tilestore.TileStore(db, ts)
         n = [0]
         original = st._recompose
-        st._recompose = lambda z, x, y: (n.__setitem__(0, n[0] + 1), original(z, x, y))[1]
+        st._recompose = lambda *a, **k: (n.__setitem__(0, n[0] + 1), original(*a, **k))[1]
         for iy in range(side):
             for ix in range(side):
                 st.put_tile(4, ix, iy, numbered_tile(ts, colour(iy * side + ix, 64), ""),
@@ -1188,6 +1192,79 @@ def main():
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+    # ------------------------------------------------------------------ 22
+    print("22. pyramid: sample instead of scale, once the content is unreadable")
+
+    PTS = 64                       # so the floor lands at a level we can reach
+    pyr = os.path.join(args.out, "pyramid_mode.tiles.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(pyr + suffix):
+            os.remove(pyr + suffix)
+    LEAFZ = 4
+    with tilestore.TileStore(pyr, PTS) as st:
+        side = 1 << LEAFZ
+        for iy in range(side):
+            for ix in range(side):
+                st.put_tile(LEAFZ, ix, iy,
+                            numbered_tile(PTS, colour(iy * side + ix, side * side),
+                                          f"{ix},{iy}"),
+                            kind=tilestore.LEAF, meta={"kind": "leaf"})
+        st.db.commit()
+
+        # One leaf tile's content is PTS >> (LEAFZ - z) px at level z: 64 at z4,
+        # 32 at z3, 16 at z2... so with a floor of 32 only z3 averages.
+        check("the floor decides which levels average",
+              [st._scales_at(z, LEAFZ, tilestore.PYRAMID_SAMPLE, 32)
+               for z in (3, 2, 1, 0)] == [True, False, False, False],
+              str([st._scales_at(z, LEAFZ, tilestore.PYRAMID_SAMPLE, 32)
+                   for z in (3, 2, 1, 0)]))
+        check("scale mode always averages",
+              all(st._scales_at(z, LEAFZ, tilestore.PYRAMID_SCALE, 32)
+                  for z in (3, 2, 1, 0)))
+
+        st.rebuild_pyramid(mode=tilestore.PYRAMID_SAMPLE, min_px=32)
+        st.db.commit()
+        # z2 is assembled from a quarter of each z3 child, cropped at 1:1.
+        parent = st.get_image(2, 0, 0).convert("RGBA")
+        meta = st.get_meta(2, 0, 0)
+        check("a sampled tile says so, and counts all four children",
+              meta.get("sampled") is True and meta.get("children") == 4, str(meta))
+        half = PTS // 2
+        exact = 0
+        for dx in (0, 1):
+            for dy in (0, 1):
+                child = st.get_image(3, dx, dy).convert("RGBA")
+                box = (dx * half, dy * half, dx * half + half, dy * half + half)
+                got = parent.crop(box)
+                if got.tobytes() == child.crop(box).tobytes():
+                    exact += 1
+        check("each quadrant is that child's own quadrant, pixel for pixel",
+              exact == 4, f"{exact} of 4 -- nothing was resampled")
+        sampled_z0 = st.get_png(0, 0, 0)
+
+        st.rebuild_pyramid(mode=tilestore.PYRAMID_SCALE, min_px=32)
+        st.db.commit()
+        check("scale mode gives a different z=0 tile", st.get_png(0, 0, 0) != sampled_z0)
+        check("and averages four children there",
+              (st.get_meta(0, 0, 0) or {}).get("children") == 4,
+              str((st.get_meta(0, 0, 0) or {}).get("children")))
+        check("both modes still produce the same tile SET",
+              st.stats()["tiles"] > 0 and st.stats()["min_zoom"] == 0)
+
+        # The settings stick to the map, so a later rebuild agrees without being told.
+        check("the mode is remembered", st.get_map_meta("pyramid_mode") == "scale"
+              and st.get_map_meta("pyramid_min_px") == "32",
+              f"{st.get_map_meta('pyramid_mode')}/{st.get_map_meta('pyramid_min_px')}")
+        st.rebuild_pyramid()
+        st.db.commit()
+        check("and a rebuild with no arguments reuses it",
+              (st.get_meta(0, 0, 0) or {}).get("children") == 4)
+        try:
+            st.pyramid_settings(mode="nonsense")
+            check("an unknown mode is refused", False, "no error")
+        except ValueError:
+            check("an unknown mode is refused", True)
 
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):

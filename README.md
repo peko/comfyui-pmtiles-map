@@ -166,6 +166,42 @@ ComfyUI) stay responsive. While the pyramid is missing the saver marks the map
 `pyramid_stale`, the viewer's build button lights up, and **zooming out is capped
 two levels below the deepest stored level** — see the note in the viewer section.
 
+### Averaging a pyramid stops working before it runs out of levels
+
+An averaged level halves the content, so one leaf tile's worth of image occupies
+`tile_size >> (leaf_zoom - z)` pixels at level z. On a 512 px map:
+
+| z | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|
+| `scale` | 512 | 256 | 128 | 64 | 32 | 16 | 8 | 4 | 2 px |
+| `sample` | 512 | 256 | 128 | 64 | **64** | **64** | **64** | **64** | **64 px** |
+
+Below about 64 px a render is no longer an image, and averaging four of them
+gives the grey static of a dead television channel — the shallow half of the
+pyramid is unreadable however far you zoom out.
+
+`pyramid_mode` (`sample`, the default) keeps averaging while the content stays
+above `pyramid_min_px` (64), and past that point builds each tile from **a
+quarter of each of its four children** — `1/4 + 1/4 + 1/4 + 1/4`, cropped at 1:1
+and never resampled. The scale then stops shrinking and z0–z4 stay legible.
+
+The trade is coverage rather than resolution: each level past the floor shows a
+quarter of the area at the same size. That is inherent — constant scale and a
+shrinking share of the map cannot both hold. Taking a quarter of *all four*
+children is what stops it being a lottery: keeping one child whole would be
+cheaper (the bytes could be copied outright) but the same branch would win at
+every level, so three quarters of the map would never appear at any zoom.
+
+`scale` is still there, and is the right choice for a map whose tiles are a
+continuous surface rather than a grid of separate images. Both the mode and the
+floor are remembered on the map, so the viewer's ⛰ build and a later
+`--rebuild-pyramid` use what the map was built with:
+
+```bash
+python tools/pmtiles_map.py --rebuild-pyramid <map> --pyramid-mode scale
+python tools/pmtiles_import.py … --pyramid-min-px 96
+```
+
 ## Two ways to read a map
 
 The same page serves both, picked automatically and switchable in the header:
