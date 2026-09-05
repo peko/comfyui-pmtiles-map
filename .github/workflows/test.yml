@@ -27,7 +27,7 @@ jobs:
         run: python -m pip install --upgrade pip pillow aiohttp -r requirements.txt
 
       - name: Modules import without ComfyUI
-        run: python -c "import sys; sys.path.insert(0, '.'); import tilestore, archive, hilbert, promptmeta, paths, routes; print('ok')"
+        run: python -c "import sys; sys.path.insert(0, '.'); import tilestore, archive, hilbert, imgimport, promptmeta, paths, routes; print('ok')"
 
       - name: Test suite
         run: python tools/pmtiles_map_test.py --out "${{ runner.temp }}/pmtiles-test"

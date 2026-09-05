@@ -599,16 +599,30 @@ class TileStore:
 
     def put_tile(self, z, x, y, img, kind=LEAF, meta=None):
         """Store one tile image.  Replaces whatever was there."""
+        return self.put_tile_encoded(
+            z, x, y,
+            encode_tile(img, self.store_format, self.store_quality),
+            img.width, img.height, kind=kind, meta=meta,
+        )
+
+    def put_tile_encoded(self, z, x, y, blob, w, h, kind=LEAF, meta=None):
+        """Store one already-encoded tile.  Replaces whatever was there.
+
+        Split out of `put_tile` so a bulk importer can do the expensive part --
+        decode, pad, crop, encode -- in worker processes and leave the parent
+        with nothing but the insert, since SQLite has to stay single-threaded.
+        `blob` must be in this store's `store_format`; nothing re-checks it,
+        `open_png` sniffs the signature on the way back out.
+        """
         if (1 << z) <= max(x, y) or min(x, y) < 0:
             raise ValueError(f"tile {z}/{x}/{y} is outside the z={z} extent")
-        blob = encode_tile(img, self.store_format, self.store_quality)
         self.db.execute(
             "INSERT INTO tiles (z, x, y, png, w, h, kind, mtime, webp, webp_q) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL) "
             "ON CONFLICT(z, x, y) DO UPDATE SET png = excluded.png, "
             "w = excluded.w, h = excluded.h, kind = excluded.kind, "
             "mtime = excluded.mtime, webp = NULL, webp_q = NULL",
-            (z, x, y, blob, img.width, img.height, kind, time.time()),
+            (z, x, y, blob, w, h, kind, time.time()),
         )
         # New pixels, so any encode of the old ones is wrong. The row's own
         # legacy columns are cleared above; the cache table needs its own delete.

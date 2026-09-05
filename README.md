@@ -13,6 +13,12 @@ SavePMTilesMap  ->  output/maps/<name>.pmtiles   (+ <name>.tiles.db)
                     http://127.0.0.1:8188/map/
 ```
 
+Renders you already have go in too: `tools/pmtiles_import.py <folder-or-.7z>`
+pads each image into its own block of tiles and lays the blocks along the same
+Hilbert curve, so a finished collection becomes a map without ComfyUI running at
+all. And `tools/pmtiles_export.py` writes a directory you can upload anywhere —
+or hand to someone with no web server, since it carries a dependency-free one.
+
 ## Install
 
 ```bash
@@ -246,12 +252,68 @@ python tools/pmtiles_map.py --rebuild-pyramid <map>
 python tools/pmtiles_map.py --refresh-meta <map> [--dry-run]
 python tools/pmtiles_map.py --dump <map> <z> <x> <y> out.webp
 
+python tools/pmtiles_import.py <dir-or-.7z> --map-name <map> [--dry-run]
+
 python tools/pmtiles_map_test.py            # 50 checks, no ComfyUI needed
 python tools/pmtiles_map_test.py --bench 1000
 ```
 
 The maps directory is found automatically (first `output/maps` at or above the
 pack), or set `PMTILES_MAPS_DIR`.
+
+## Importing images you already have
+
+The saver node takes an IMAGE tensor out of a running graph, and it slices only
+when the render is an exact multiple of the tile size. A folder of finished
+images is usually neither, so `tools/pmtiles_import.py` pads instead: an image
+becomes the smallest `nx × ny` block of tiles that holds it, **centred**, with
+the remainder transparent. A 960×1408 render at `--tile-size 512` is a 2×3
+block with 32 px left/right and 64 px top/bottom.
+
+```bash
+python tools/pmtiles_import.py photos/ --map-name gallery --dry-run
+python tools/pmtiles_import.py photos/ --map-name gallery --jobs 10
+python tools/pmtiles_import.py pack.7z --subdir "root/Booru" --map-name booru
+```
+
+Blocks are laid along the Hilbert curve, one per manifest index, at the shallowest
+zoom that holds them all — so consecutive images are adjacent on the map *and*
+contiguous in the archive, exactly as with the `HilbertXY` node, except that the
+step may differ per axis. `--dry-run` prints the whole layout plus size and time
+estimates and writes nothing; it refuses to start if the estimate does not fit in
+the free space.
+
+Because an image's position **is** its index in the manifest, the importer records
+the manifest's hash and refuses to run against a map built from a different list —
+adding one file would otherwise relocate everything after it on top of tiles
+already written. `--resume` (the default) skips any image whose block is already
+present, and leaves the pyramid alone when there was nothing to write.
+
+Three phases, in this order:
+
+| | |
+|---|---|
+| leaves | parallel — the workers decode, pad, crop and encode, the parent only inserts, because SQLite stays single-threaded |
+| pyramid | one `rebuild_pyramid` at the end, never `recompose_ancestors` per image |
+| archive | the WebP encode is ~345 ms a 512 px tile, so the cache is warmed in parallel first and `build_archive` then just copies bytes |
+
+Two settings worth choosing rather than accepting:
+
+* **`--store-format`** defaults to `webp_lossy` at `--store-quality 80`, which is
+  right when the sources are already JPEG. Each pyramid level is composed from
+  the one below and re-encoded, so lossy storage compounds per level;
+  `webp_lossless` costs ~5× the disk and removes that entirely.
+* **`--tile-meta`** defaults to `origin`: the full record goes on the render's
+  top-left tile — all `search()` and the export ever read — and a stub on the
+  rest. With `full`, a map of a few thousand images pushes the archive's 8 MB
+  metadata budget, at which point `build_archive` embeds **no** per-tile
+  metadata at all. The store keeps it either way, and that is what the viewer
+  reads.
+
+If a `readme.txt` sits at the source root it is parsed for prompt templates
+(`--prompt-template` overrides), with `--artist-token` (default `xxx`) replaced
+by each image's title, so the map is searchable by prompt and not just by
+filename. `--meta KEY=VALUE` adds anything else.
 
 ## How it works
 
@@ -283,6 +345,22 @@ On an RTX 4060 (8 GB), 1024² renders at 256 px tiles:
 | full-render preview, 1024² | 0.16 s |
 | per render, live feed | one event naming ~23 tiles |
 
+Bulk import, on 12 threads: **3249 JPEGs of 960×1408** into a 2×3-tile block
+each, `--tile-size 512`, `--store-format webp_lossy --store-quality 80`,
+`--jobs 10`:
+
+| phase | | |
+|---|---|---|
+| leaves | 19 494 tiles, 0 failures | ~18 min |
+| pyramid | 6504 derived, z7→z0 | **5:43** |
+| prewarm | 6504 WebP encodes, parallel | ~5 min |
+| archive | 25 998 tiles, 697 MB, **0 encoded on the fly** | **2 s** |
+| | store 1.46 GB, archive 697 MB | ~33 min total |
+
+The archive line is the whole argument for warming the cache first: at 345 ms a
+512 px tile, `build_archive` would otherwise have spent about **2.5 hours** in
+`encode_webp` for the same bytes.
+
 ## Exporting for a CDN
 
 ```bash
@@ -290,11 +368,12 @@ python tools/pmtiles_export.py <map> ./out --build      # build, then bundle
 python tools/pmtiles_export.py <map> ./out --serve 8080 # and look at it first
 ```
 
-The bundle is a directory you upload as-is — no server code:
+The bundle is a directory you upload as-is — nothing server-side to run:
 
 ```
 out/  index.html  static.js  config.js  search.js
       <map>.pmtiles          leaflet/   pmtiles/
+      serve.py               README.md
 ```
 
 `index.html` reads the archive **by HTTP range request** through the vendored
@@ -312,9 +391,29 @@ Export refuses to run when the archive is behind the store or has no pyramid,
 naming which — uploading a half-serialized map is the mistake worth catching.
 `--build` fixes both first; `--force` exports anyway.
 
-**Do not check the bundle with `python -m http.server`** — it does not implement
-`Range`, so `pmtiles.js` gets the whole archive back for every request and the map
-stays blank. `--serve` runs a Range-capable one.
+### It carries its own server
+
+A recipient with no web server — and no `pip` — can still open the map:
+
+```bash
+cd out && python3 serve.py                 # http://127.0.0.1:8000/
+python3 serve.py 8080 --host 0.0.0.0       # and from the rest of the LAN
+```
+
+`serve.py` is standard library only. It exists for exactly one reason:
+
+**`python -m http.server` does not implement `Range`.** Measured on a real
+bundle — asking for the archive's 127-byte header returns
+`HTTP/1.0 200` with `Content-Length: 10918696`, the whole file, and it would do
+that for every one of the ~16 KB reads `pmtiles.js` makes per tile. The page
+loads, the map stays blank, and nothing says why. `serve.py` answers the same
+request with `206` and `Content-Range: bytes 0-126/10918696`.
+
+`--serve` runs that same file rather than a second implementation, so what is
+checked here is what ships. Its behaviour is covered by section 21 of the test
+suite: 206 with byte-exact content, suffix ranges, `416` for a range past the
+end, a malformed `Range` falling back to a full `200` per RFC 9110, and an
+archive reassembled from 49 sequential range reads coming out identical.
 
 ## Using an archive somewhere else
 

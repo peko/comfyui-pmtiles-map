@@ -35,6 +35,57 @@ WEB = os.path.join(PACK, "web")
 _FIELDS = ("title", "tags", "prompt", "negative", "seed", "steps", "cfg",
            "sampler_name", "models", "time")
 
+BUNDLE_README = """\
+# {name}
+
+A zoomable map of {renders} renders: {tiles} tiles, z{min_zoom}-{max_zoom}, \
+{tile_size} px.
+
+## Look at it
+
+```
+python3 serve.py            # then open http://127.0.0.1:8000/
+python3 serve.py 8080 --host 0.0.0.0     # and from other machines on the LAN
+```
+
+`serve.py` is standard library only -- no pip install, no dependencies, any
+Python 3.8+.
+
+**Do not use `python -m http.server`.** It has no `Range` support, so
+`pmtiles.js` gets the entire archive back for each of the ~16 KB reads it makes
+per tile: the page loads, the map stays blank, and nothing says why. That single
+missing feature is why `serve.py` is here.
+
+## Put it on a real host
+
+Upload the whole directory. `index.html` reads `{archive}` by HTTP range
+request, and search runs over `search.js`, baked at export time -- there is
+nothing server-side to run. Two things the host must get right:
+
+* **`Range` must be answered with `206`.** Everything hangs on this.
+* **The `.pmtiles` must be served untransformed.** A CDN that gzips or otherwise
+  rewrites the body breaks the byte offsets the format is built on.
+
+If the page and the archive live on different origins, the archive's host also
+needs permissive CORS.
+
+Static hosts that work: any S3-compatible bucket, Cloudflare R2, Netlify,
+Hugging Face (`resolve/main/...` answers 206 and reflects the request Origin).
+GitHub Pages serves static files but caps a file at 100 MB and a site at 1 GB,
+and cannot serve Git LFS objects at all -- fine for a small map, not for a large
+archive.
+
+## What is in here
+
+| | |
+|---|---|
+| `index.html`, `static.js`, `config.js` | the viewer |
+| `search.js` | one entry per render, baked at export |
+| `{archive}` | the tiles |
+| `leaflet/`, `pmtiles/` | vendored, no CDN needed |
+| `serve.py` | the local server described above |
+"""
+
 
 def search_index(db_path, archive_path, limit=None):
     """One entry per render: the origin tile of each block, plus its metadata."""
@@ -83,6 +134,8 @@ def main():
                     help="cap the search index (0 = every render)")
     ap.add_argument("--serve", type=int, metavar="PORT", default=0,
                     help="after exporting, serve the bundle on this port for a look")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="--serve bind address; 0.0.0.0 to allow the LAN in")
     args = ap.parse_args()
 
     db = os.path.join(args.maps_dir, f"{args.map}.tiles.db")
@@ -152,6 +205,19 @@ def main():
         fh.write(template.replace("__TITLE__", args.map))
     shutil.copy2(os.path.join(WEB, "static", "static.js"),
                  os.path.join(out, "static.js"))
+    # The bundle carries its own server, so a recipient with no web server at
+    # all -- and no pip -- can still look at the map.  `python -m http.server`
+    # cannot substitute: no Range, so every tile request returns the whole
+    # archive and the map stays blank.
+    shutil.copy2(os.path.join(WEB, "static", "serve.py"),
+                 os.path.join(out, "serve.py"))
+    os.chmod(os.path.join(out, "serve.py"), 0o755)
+    with open(os.path.join(out, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write(BUNDLE_README.format(
+            name=args.map, archive=os.path.basename(pmt),
+            tiles=info["tiles"], min_zoom=info["min_zoom"],
+            max_zoom=info["max_zoom"], tile_size=info["tile_size"],
+            renders=len(entries)))
     # search.js has to load before static.js reads window.SEARCH.
     with open(os.path.join(out, "index.html"), encoding="utf-8") as fh:
         html = fh.read()
@@ -168,8 +234,9 @@ def main():
           f"{info['tile_size']}px")
     print(f"  {len(entries)} renders in the search index")
     print(f"  {total / 1e6:.1f} MB total")
-    print("\ncheck it locally:")
-    print(f"  ./venv/bin/python tools/pmtiles_export.py {args.map} {out} --serve 8080")
+    print("\ncheck it locally, or hand the directory to someone who has no web")
+    print("server at all -- serve.py inside it needs nothing but python3:")
+    print(f"  cd {out} && python3 serve.py")
     print("  (NOT `python -m http.server`: it ignores Range, and pmtiles.js reads")
     print("   the archive by range -- the map would simply stay blank)")
     print("\nuploading:")
@@ -178,22 +245,26 @@ def main():
     print("  * allow Range requests, and CORS if the page lives on another origin")
 
     if args.serve:
-        serve(out, args.serve)
+        serve(out, args.serve, args.host)
 
 
-def serve(directory, port):
-    """A Range-capable static server, which is the whole point.
+def bundle_server():
+    """The `serve.py` that ships inside the bundle, imported as a module.
 
-    aiohttp's FileResponse answers `Range` with 206; python -m http.server does
-    not implement it at all, so pmtiles.js gets the entire archive back for every
-    range request and the map never draws. Checking the bundle with the wrong
-    server is a good way to think the export is broken.
+    Deliberately the same file the recipient runs: checking an export with a
+    different server than the one distributed with it is how a Range bug ships.
+    It is standard-library only, so `--serve` no longer needs aiohttp either.
     """
-    from aiohttp import web as aioweb
-    app = aioweb.Application()
-    app.router.add_static("/", directory, show_index=True)
-    print(f"\nserving {directory} on http://127.0.0.1:{port}/  (ctrl-c to stop)")
-    aioweb.run_app(app, host="127.0.0.1", port=port, print=None)
+    import importlib.util
+    path = os.path.join(WEB, "static", "serve.py")
+    spec = importlib.util.spec_from_file_location("pmtiles_bundle_serve", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def serve(directory, port, host="127.0.0.1"):
+    bundle_server().serve(directory, port, host)
 
 
 if __name__ == "__main__":

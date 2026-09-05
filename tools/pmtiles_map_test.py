@@ -14,6 +14,12 @@ Checks, in order:
  3. round trip: every tile decodes at the right size, and leaf XMP survives
  4. pyramid content: sampled pixels match the child colour that should be there
  5. holes: a partially filled parent stays transparent, not black
+...
+20. bulk import: an odd-sized image is padded centred into its own nx x ny
+    block, blocks are laid along the Hilbert curve without overlapping, and
+    --resume writes nothing on a second pass
+21. the bundle's own serve.py answers Range with byte-exact 206s -- the one
+    thing `python -m http.server` cannot do, and without which a map is blank
 Writes a contact sheet per zoom level to --out so the pyramid can be *looked at*
 (CLAUDE.md rule 1: never judge an image pipeline by its exit code).
 """
@@ -33,14 +39,19 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 PACK = os.path.dirname(HERE)
 sys.path.insert(0, PACK)
+sys.path.insert(0, HERE)          # the CLI tools are siblings, not pack modules
 
 from PIL import Image   # noqa: E402
 
 import archive          # noqa: E402
 import paths            # noqa: E402
 import hilbert          # noqa: E402
+import imgimport        # noqa: E402
 import routes            # noqa: E402
 import tilestore        # noqa: E402
+
+import pmtiles_export   # noqa: E402
+import pmtiles_import   # noqa: E402
 
 FAILED = []
 PASSED = []
@@ -65,6 +76,25 @@ def numbered_tile(ts, rgb, text):
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, ts - 1, ts - 1], outline=(0, 0, 0))
     d.text((6, 4), text, fill=(0, 0, 0))
+    return img
+
+
+def odd_image(w, h, i):
+    """A numbered gradient at a size that is a multiple of no tile size.
+
+    The importer's whole reason to exist is that real images are shaped like
+    this, so the fixture has to be too -- a square fixture would pass a padding
+    bug straight through.
+    """
+    from PIL import ImageDraw
+    img = Image.new("RGB", (w, h))
+    base = colour(i, 8)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        img.paste(tuple(int(c * (0.35 + 0.65 * t)) for c in base), (0, y, w, y + 1))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, w - 1, h - 1], outline=(255, 255, 255))
+    d.text((6, 4), f"image {i}  {w}x{h}", fill=(255, 255, 255))
     return img
 
 
@@ -916,6 +946,248 @@ def main():
         check("an unknown format is refused", False, "no error raised")
     except ValueError:
         check("an unknown format is refused", True)
+
+    # ------------------------------------------------------------------ 20
+    print("20. bulk import: odd-sized images padded into Hilbert blocks")
+
+    ITS = 128                       # small tiles: this section is geometry, not bytes
+    src_dir = os.path.join(args.out, "import_src")
+    shutil.rmtree(src_dir, ignore_errors=True)
+    os.makedirs(os.path.join(src_dir, "cat"))
+    N_IMPORT = 20
+    for i in range(N_IMPORT):
+        odd_image(300, 100, i).save(
+            os.path.join(src_dir, "cat", f"image {i}.png"))
+
+    check("block_tiles rounds up", imgimport.block_tiles(960, 1408, 512) == (2, 3),
+          str(imgimport.block_tiles(960, 1408, 512)))
+    check("an exact multiple is not rounded further",
+          imgimport.block_tiles(1024, 1536, 512) == (2, 3))
+    check("one pixel over costs a whole tile",
+          imgimport.block_tiles(1025, 1536, 512) == (3, 3))
+    check("and the same image is 4x6 at 256",
+          imgimport.block_tiles(960, 1408, 256) == (4, 6))
+
+    odd = odd_image(300, 100, 3)
+    tiles, off, resized = imgimport.cut_padded(odd, ITS, 3, 1)
+    check("padding centres the image", off == ((3 * ITS - 300) // 2, (ITS - 100) // 2),
+          str(off))
+    check("nothing was resampled", not resized)
+    check("the block is exactly nx*ny tiles of tile_size",
+          len(tiles) == 3 and all(t.size == (ITS, ITS) for _, t in tiles))
+    canvas = Image.new("RGBA", (3 * ITS, ITS), (0, 0, 0, 0))
+    for (ix, iy), tile in tiles:
+        canvas.paste(tile, (ix * ITS, iy * ITS))
+    check("the padding is transparent, not black",
+          canvas.getpixel((0, 0))[3] == 0 and canvas.getpixel((3 * ITS - 1, 0))[3] == 0)
+    check("and reassembling the tiles is bit-exact",
+          canvas.crop((off[0], off[1], off[0] + 300, off[1] + 100)).tobytes()
+          == odd.convert("RGBA").tobytes())
+
+    # An image bigger than its block is contained, not cropped and not squashed.
+    big = odd_image(900, 300, 0)
+    _, _, was_resized = imgimport.cut_padded(big, ITS, 3, 1)
+    check("an oversized image is contain-fit rather than refused", was_resized)
+
+    plan = imgimport.plan(N_IMPORT, 300, 100, ITS)
+    order, pz = plan["block_order"], plan["z"]
+    check("block_order_for(3249) is 6", imgimport.block_order_for(3249) == 6)
+    check("a 2x3 block at order 6 needs z=8", imgimport.zoom_for(6, 2, 3) == 8)
+    origins = [imgimport.block_origin(order, i, plan["nx"], plan["ny"])
+               for i in range(N_IMPORT)]
+    cells = {(x + ix, y + iy) for x, y in origins
+             for iy in range(plan["ny"]) for ix in range(plan["nx"])}
+    check("blocks never overlap", len(cells) == N_IMPORT * plan["nx"] * plan["ny"],
+          f"{len(cells)} of {N_IMPORT * plan['nx'] * plan['ny']}")
+    check("every tile is inside the zoom's extent",
+          all(max(x, y) < (1 << pz) for x, y in cells))
+    steps = [(abs(origins[i + 1][0] // plan["nx"] - origins[i][0] // plan["nx"])
+              + abs(origins[i + 1][1] // plan["ny"] - origins[i][1] // plan["ny"]))
+             for i in range(N_IMPORT - 1)]
+    check("consecutive indices are adjacent blocks", set(steps) == {1}, str(sorted(set(steps))))
+    try:
+        imgimport.block_origin(order, 1 << (2 * order), plan["nx"], plan["ny"])
+        check("an index past the curve is refused, not wrapped", False, "no error")
+    except ValueError:
+        check("an index past the curve is refused, not wrapped", True)
+
+    # put_tile_encoded has to be put_tile, or the importer writes a different map
+    # than the node does.
+    enc_a = os.path.join(args.out, "enc_a.tiles.db")
+    enc_b = os.path.join(args.out, "enc_b.tiles.db")
+    for path in (enc_a, enc_b):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(path + suffix):
+                os.remove(path + suffix)
+    sample = numbered_tile(ITS, (10, 120, 200), "enc")
+    with tilestore.TileStore(enc_a, ITS) as sa, tilestore.TileStore(enc_b, ITS) as sb:
+        sa.put_tile(0, 0, 0, sample, meta={"kind": "leaf", "n": 1})
+        sb.put_tile_encoded(
+            0, 0, 0, tilestore.encode_tile(sample, sb.store_format, sb.store_quality),
+            sample.width, sample.height, meta={"kind": "leaf", "n": 1})
+        sa.db.commit(); sb.db.commit()
+        check("put_tile_encoded stores what put_tile stores",
+              sa.get_png(0, 0, 0) == sb.get_png(0, 0, 0)
+              and sa.get_meta(0, 0, 0) == sb.get_meta(0, 0, 0))
+
+    imp_db = os.path.join(args.out, "import.tiles.db")
+    imp_pmt = os.path.join(args.out, "import.pmtiles")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(imp_db + suffix):
+            os.remove(imp_db + suffix)
+    rc = pmtiles_import.main([
+        src_dir, "--map-name", "import", "--maps-dir", args.out,
+        "--tile-size", str(ITS), "--jobs", "2", "--store-format", "png",
+        "--webp-quality", str(args.quality), "--quiet",
+    ])
+    check("the importer runs to completion", rc == 0, f"rc={rc}")
+
+    with tilestore.TileStore(imp_db) as st:
+        stats = st.stats()
+        leaves = stats["per_zoom"].get(stats["max_zoom"], {}).get("leaf", 0)
+        check("every image became a full block of leaves",
+              leaves == N_IMPORT * plan["nx"] * plan["ny"], str(leaves))
+        check("the pyramid reaches z=0", stats["min_zoom"] == 0, str(stats["min_zoom"]))
+        check("and every level between is populated",
+              all(zz in stats["per_zoom"]
+                  for zz in range(stats["min_zoom"], stats["max_zoom"] + 1)))
+        origin_rows = st.db.execute(
+            "SELECT count(*) FROM tile_meta "
+            "WHERE json_extract(meta,'$.grid[0]') = 0 "
+            "AND json_extract(meta,'$.grid[1]') = 0").fetchone()[0]
+        check("grid is per image, so search sees one row per render",
+              origin_rows == N_IMPORT, str(origin_rows))
+        before_seq = st.current_seq()
+        before_tiles = stats["tiles"]
+
+    hits = tilestore.search(imp_db, "image 13")["results"]
+    check("search finds an imported title", len(hits) == 1, f"{len(hits)} hits")
+    if hits:
+        check("and reports the render's own footprint",
+              (hits[0]["nx"], hits[0]["ny"]) == (plan["nx"], plan["ny"]))
+        stitched = archive.stitch_render(
+            imp_db, imp_pmt, hits[0]["z"], hits[0]["x"] + plan["nx"] - 1, hits[0]["y"])
+        check("a non-origin tile stitches back to the whole render",
+              stitched is not None
+              and stitched[0].size == (plan["nx"] * ITS, plan["ny"] * ITS)
+              and stitched[1] == (hits[0]["z"], hits[0]["x"], hits[0]["y"]),
+              "none" if stitched is None else f"{stitched[0].size} from {stitched[1]}")
+
+    rc = pmtiles_import.main([
+        src_dir, "--map-name", "import", "--maps-dir", args.out,
+        "--tile-size", str(ITS), "--jobs", "2", "--store-format", "png",
+        "--webp-quality", str(args.quality), "--no-archive", "--quiet",
+    ])
+    with tilestore.TileStore(imp_db) as st:
+        # current_seq, not the tile count: an idempotent rewrite would leave the
+        # count alone while still doing all the work.
+        check("--resume writes nothing the second time",
+              rc == 0 and st.current_seq() == before_seq
+              and st.stats()["tiles"] == before_tiles,
+              f"seq {before_seq} -> {st.current_seq()}")
+        cached = st.db.execute(
+            "SELECT count(*) FROM tiles t LEFT JOIN tile_webp c "
+            "ON c.z=t.z AND c.x=t.x AND c.y=t.y AND c.q=? "
+            "WHERE c.blob IS NULL", (int(args.quality),)).fetchone()[0]
+        check("the prewarm left no tile for build_archive to encode", cached == 0,
+              f"{cached} uncached")
+
+    # An image's Hilbert index is its position in the manifest, so dropping one
+    # would relocate every image after it on top of the tiles already written.
+    os.remove(os.path.join(src_dir, "cat", "image 0.png"))
+    try:
+        pmtiles_import.main([src_dir, "--map-name", "import", "--maps-dir", args.out,
+                             "--tile-size", str(ITS), "--jobs", "2",
+                             "--no-archive", "--quiet"])
+        check("a changed manifest is refused, not silently relocated", False, "no exit")
+    except SystemExit as exc:
+        check("a changed manifest is refused, not silently relocated",
+              exc.code not in (0, None), f"exit {exc.code}")
+
+    # ------------------------------------------------------------------ 21
+    print("21. the bundled server answers Range, which is the whole job")
+
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+
+    serve_mod = pmtiles_export.bundle_server()
+    check("parse_range: a plain range", serve_mod.parse_range("bytes=0-99", 500)
+          == (0, 99))
+    check("parse_range: open-ended", serve_mod.parse_range("bytes=400-", 500)
+          == (400, 499))
+    check("parse_range: a suffix", serve_mod.parse_range("bytes=-100", 500)
+          == (400, 499))
+    check("parse_range: past the end is clamped",
+          serve_mod.parse_range("bytes=100-99999", 500) == (100, 499))
+    check("parse_range: junk is ignored, not an error",
+          serve_mod.parse_range("bytes=abc", 500) is None
+          and serve_mod.parse_range("bytes=0-9,20-29", 500) is None)
+    check("parse_range: wholly past the end is unsatisfiable",
+          serve_mod.parse_range("bytes=600-700", 500) == "unsatisfiable")
+
+    srv_dir = os.path.join(args.out, "serve_fixture")
+    os.makedirs(srv_dir, exist_ok=True)
+    payload = bytes(random.Random(11).randrange(256) for _ in range(200_000))
+    with open(os.path.join(srv_dir, "fixture.pmtiles"), "wb") as fh:
+        fh.write(payload)
+    with open(os.path.join(srv_dir, "index.html"), "w") as fh:
+        fh.write("<h1>ok</h1>")
+
+    httpd = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        lambda *a, **k: serve_mod.RangeHandler(*a, directory=srv_dir, **k))
+    serve_mod.QUIET = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def fetch(path, rng=None):
+        req = urllib.request.Request(base + path)
+        if rng:
+            req.add_header("Range", rng)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, dict(r.headers), r.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, dict(exc.headers), exc.read()
+
+    try:
+        status, headers, body = fetch("/fixture.pmtiles", "bytes=1000-1999")
+        check("a range comes back as 206 with the exact bytes",
+              status == 206 and body == payload[1000:2000]
+              and headers.get("Content-Range") == f"bytes 1000-1999/{len(payload)}",
+              f"{status} {headers.get('Content-Range')} {len(body)} bytes")
+        status, headers, body = fetch("/fixture.pmtiles", "bytes=-64")
+        check("a suffix range reads from the end",
+              status == 206 and body == payload[-64:])
+        status, headers, _ = fetch("/fixture.pmtiles", "bytes=999999-")
+        check("a range past the end is 416, not a truncated 206",
+              status == 416 and headers.get("Content-Range") == f"bytes */{len(payload)}",
+              f"{status} {headers.get('Content-Range')}")
+        status, _, body = fetch("/fixture.pmtiles", "bytes=nonsense")
+        check("a malformed range serves the whole file, per RFC 9110",
+              status == 200 and len(body) == len(payload), f"{status} {len(body)}")
+        status, headers, body = fetch("/fixture.pmtiles")
+        check("no range at all still serves the file",
+              status == 200 and body == payload)
+        check("and Accept-Ranges advertises the support",
+              headers.get("Accept-Ranges") == "bytes")
+        # The failure this file exists to prevent: an archive reassembled from
+        # many small reads has to be identical, or pmtiles.js reads garbage
+        # offsets and the map draws nothing.
+        step = 4096
+        rebuilt = b"".join(
+            fetch("/fixture.pmtiles", f"bytes={off}-{off + step - 1}")[2]
+            for off in range(0, len(payload), step))
+        check("49 sequential ranges reassemble the file exactly",
+              rebuilt == payload, f"{len(rebuilt)} of {len(payload)}")
+        status, _, body = fetch("/")
+        check("and an ordinary page is still served", status == 200 and b"ok" in body)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):
