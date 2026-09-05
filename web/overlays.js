@@ -44,8 +44,8 @@ const OUTLINE_PX = 2;
 /* A drop shadow thrown *outward* from the approved region, so the outline reads
  * as raised off the map rather than drawn on it -- and so a white line stays
  * legible over a pale render, which it would not on its own. */
-const SHADOW_COLOR = 'rgba(0, 0, 0, .55)';
-const SHADOW_BLUR = 12;
+const SHADOW_COLOR = 'rgba(0, 0, 0, 1)';
+const SHADOW_BLUR = 36;
 
 const overlay = {
   masks: null,                    // { reject: {canvas, ctx}, approve: {...} }
