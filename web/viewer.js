@@ -509,13 +509,26 @@ function storeUi() {
   try { localStorage.setItem(UI_KEY, JSON.stringify(state.ui)); } catch (err) { /* full */ }
 }
 
-/* overlays.js appends 'marks' if it loaded, so the pane list stays in one place
- * and a viewer without the overlays keeps two tabs rather than a dead third. */
-const TABS = ['search', 'saved'];
+/* Tabs register themselves rather than being listed twice -- the pane list and
+ * the click handler were separate before, and a tab added to one but not the
+ * other is a header that simply does nothing when clicked. */
+const TABS = [];
 
-function setTab(name) {
-  state.ui.tab = name;
-  storeUi();
+function registerTab(name) {
+  if (TABS.includes(name)) return;
+  TABS.push(name);
+  el(`tab-${name}`).addEventListener('click', () => setTab(name));
+}
+
+function setTab(name, remember = true) {
+  // `remember` exists for the initial restore: overlays.js registers its tab
+  // after this file runs, so a stored preference for a not-yet-registered tab
+  // falls back to search -- and persisting that fallback would erase the
+  // preference before the tab that owns it ever loads.
+  if (remember) {
+    state.ui.tab = name;
+    storeUi();
+  }
   for (const tab of TABS) {
     el(`tab-${tab}`).classList.toggle('active', tab === name);
     el(`pane-${tab}`).hidden = tab !== name;
@@ -539,8 +552,8 @@ el('source-picker').addEventListener('change', (ev) => {
   refreshMaps({ initial: true });
 });
 
-el('tab-search').addEventListener('click', () => setTab('search'));
-el('tab-saved').addEventListener('click', () => setTab('saved'));
+registerTab('search');
+registerTab('saved');
 el('left-toggle').addEventListener('click', () => setLeft(el('left').classList.contains('hidden')));
 
 /* ------------------------------------------------------- navigate to a tile */
@@ -1307,7 +1320,7 @@ try {
 }
 el('source-picker').value = state.ui.source || 'auto';
 setLeft(state.ui.left !== false);
-setTab(TABS.includes(state.ui.tab) ? state.ui.tab : 'search');
+setTab(TABS.includes(state.ui.tab) ? state.ui.tab : 'search', false);
 state.saved = loadSaved();
 renderSaved();
 refreshMaps({ initial: true });

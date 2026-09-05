@@ -514,7 +514,7 @@ setOverlay('debug', wantDebug === null ? state.ui.overlay_debug === true : wantD
  * budget for the whole origin. */
 
 const MARKS_KEY = 'pmtiles.marks.v1';
-TABS.push('marks');
+registerTab('marks');
 
 function loadMarks() {
   try {
