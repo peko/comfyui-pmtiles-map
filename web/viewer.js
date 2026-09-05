@@ -509,10 +509,14 @@ function storeUi() {
   try { localStorage.setItem(UI_KEY, JSON.stringify(state.ui)); } catch (err) { /* full */ }
 }
 
+/* overlays.js appends 'marks' if it loaded, so the pane list stays in one place
+ * and a viewer without the overlays keeps two tabs rather than a dead third. */
+const TABS = ['search', 'saved'];
+
 function setTab(name) {
   state.ui.tab = name;
   storeUi();
-  for (const tab of ['search', 'saved']) {
+  for (const tab of TABS) {
     el(`tab-${tab}`).classList.toggle('active', tab === name);
     el(`pane-${tab}`).hidden = tab !== name;
   }
@@ -1303,7 +1307,7 @@ try {
 }
 el('source-picker').value = state.ui.source || 'auto';
 setLeft(state.ui.left !== false);
-setTab(state.ui.tab === 'saved' ? 'saved' : 'search');
+setTab(TABS.includes(state.ui.tab) ? state.ui.tab : 'search');
 state.saved = loadSaved();
 renderSaved();
 refreshMaps({ initial: true });

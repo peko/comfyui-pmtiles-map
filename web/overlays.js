@@ -110,6 +110,16 @@ function tileSpan(nw, se) {
   ];
 }
 
+/* Marking a whole search result set calls paintTiles once per render, and a
+ * redraw of every visible tile per call is 500 redraws for one click. */
+let paintBatch = 0;
+
+function repaint() {
+  if (paintBatch) return;
+  if (overlay.select) overlay.select.redraw();
+  renderSelectionInfo();
+}
+
 /** Paint a rectangle of tiles into one group, or erase it from all of them. */
 function paintTiles(x0, y0, x1, y1, group) {
   const side = 1 << overlay.maskZ;
@@ -136,8 +146,7 @@ function paintTiles(x0, y0, x1, y1, group) {
     ctx.fillRect(x, y, w, h);
     overlay.counts[group] += w * h;
   }
-  if (overlay.select) overlay.select.redraw();
-  renderSelectionInfo();
+  repaint();
 }
 
 function clearSelection() {
@@ -473,7 +482,7 @@ el('sel-copy').addEventListener('click', () => {
     const btn = el('sel-copy');
     btn.textContent = 'copied';
     setTimeout(() => { btn.textContent = 'copy'; }, 900);
-  });
+  }, () => { /* clipboard denied */ });
 });
 
 window.addEventListener('keydown', (ev) => {
@@ -495,3 +504,243 @@ const wantSelect = urlFlag('select');
 const wantDebug = urlFlag('debug');
 setOverlay('select', wantSelect === null ? state.ui.overlay_select === true : wantSelect);
 setOverlay('debug', wantDebug === null ? state.ui.overlay_debug === true : wantDebug);
+
+/* ---------------------------------------------------------------- marks tab */
+/* Saved sets of marks, kept in localStorage like the liked list.
+ *
+ * Stored as flat cell indices (y * side + x) per group rather than {z,x,y}
+ * objects: a full triage pass over this dataset is ~19 500 tiles, which is
+ * ~1 MB of objects against ~120 KB of integers, and localStorage is a ~5 MB
+ * budget for the whole origin. */
+
+const MARKS_KEY = 'pmtiles.marks.v1';
+TABS.push('marks');
+
+function loadMarks() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MARKS_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object'
+      && Number.isInteger(m.z) && Array.isArray(m.approve)
+      && Array.isArray(m.reject)) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function storeMarks() {
+  try {
+    localStorage.setItem(MARKS_KEY, JSON.stringify(state.marks));
+    return true;
+  } catch (err) {
+    marksMsg('browser storage is full — delete a set and try again');
+    return false;
+  }
+}
+
+function marksMsg(text) {
+  el('marks-msg').textContent = text || '';
+  if (text) setTimeout(() => { el('marks-msg').textContent = ''; }, 4000);
+}
+
+/** The current marks as flat indices, the form they are stored in. */
+function marksSnapshot() {
+  const side = 1 << overlay.maskZ;
+  const out = { z: overlay.maskZ, side, approve: [], reject: [] };
+  for (const key of GROUP_KEYS) {
+    if (!overlay.masks || !overlay.counts[key]) continue;
+    const data = overlay.masks[key].ctx.getImageData(0, 0, side, side).data;
+    for (let i = 0, p = 3; p < data.length; p += 4, i += 1) {
+      if (data[p]) out[key].push(i);
+    }
+  }
+  return out;
+}
+
+/** Paint a stored snapshot back onto the mask, replacing what is there. */
+function applyMarks(entry) {
+  if (!overlay.masks) return false;
+  if (entry.z !== overlay.maskZ) {
+    marksMsg(`saved at zoom ${entry.z}, this map marks at ${overlay.maskZ}`);
+    return false;
+  }
+  clearSelection();
+  const side = 1 << overlay.maskZ;
+  for (const key of GROUP_KEYS) {
+    const list = entry[key] || [];
+    if (!list.length) continue;
+    const { ctx } = overlay.masks[key];
+    ctx.fillStyle = GROUPS[key].stored;
+    for (const i of list) ctx.fillRect(i % side, (i / side) | 0, 1, 1);
+    overlay.counts[key] = list.length;
+  }
+  if (overlay.select) overlay.select.redraw();
+  renderSelectionInfo();
+  return true;
+}
+
+function renderMarks() {
+  const list = el('marks-list');
+  list.textContent = '';
+  el('marks-count').textContent = state.marks.length ? String(state.marks.length) : '';
+  el('marks-empty').hidden = state.marks.length > 0;
+  state.marks.forEach((entry, index) => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = entry.name || `set ${index + 1}`;
+    name.title = 'click to load, double-click to rename';
+    name.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      name.contentEditable = 'true';
+      name.focus();
+      document.execCommand('selectAll', false, null);
+    });
+    name.addEventListener('blur', () => {
+      name.contentEditable = 'false';
+      const next = name.textContent.trim();
+      if (next && next !== entry.name) { entry.name = next; storeMarks(); }
+      renderMarks();
+    });
+    name.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); name.blur(); }
+      if (ev.key === 'Escape') { name.textContent = entry.name; name.blur(); }
+    });
+
+    const count = document.createElement('span');
+    count.className = 'coord';
+    count.textContent = `${entry.approve.length}✓ ${entry.reject.length}✕`;
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '×';
+    del.title = 'delete this set';
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      state.marks.splice(index, 1);
+      storeMarks();
+      renderMarks();
+    });
+
+    li.append(name, count, del);
+    li.addEventListener('click', () => {
+      if (name.isContentEditable) return;
+      if (applyMarks(entry)) marksMsg(`loaded “${entry.name}”`);
+    });
+    list.append(li);
+  });
+}
+
+/* --------------------------------------------------------------- mark by search */
+
+async function markMatches(group) {
+  const query = el('marks-search').value.trim();
+  if (!query || !state.name) return;
+  if (!overlay.masks) { marksMsg('no map loaded'); return; }
+  el('marks-search-hint').textContent = 'searching…';
+  let payload;
+  try {
+    // limit high enough to mark a whole category in one go; the route caps at 500.
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}`
+      + `/search?q=${encodeURIComponent(query)}&limit=500`);
+    payload = res.ok ? await res.json() : null;
+  } catch (err) {
+    payload = null;
+  }
+  if (!payload) { el('marks-search-hint').textContent = 'search unavailable'; return; }
+  const rows = payload.results || [];
+  if (!overlay.on.select) setOverlay('select', true);
+  // A search result is one *render*: its origin tile plus its nx x ny block, and
+  // the whole block has to be marked or half a render would stay unmarked.
+  paintBatch += 1;
+  for (const row of rows) {
+    const span = Math.pow(2, overlay.maskZ - row.z);
+    const nx = Math.max(1, row.nx || 1);
+    const ny = Math.max(1, row.ny || 1);
+    paintTiles(row.x * span, row.y * span,
+      (row.x + nx) * span, (row.y + ny) * span, group);
+  }
+  paintBatch -= 1;
+  repaint();
+  el('marks-search-hint').textContent =
+    `${rows.length}${payload.truncated ? '+' : ''} render`
+    + `${rows.length === 1 ? '' : 's'} ${group === 'approve' ? 'approved' : 'rejected'}`;
+}
+
+/* ------------------------------------------------------------- reject the rest */
+
+/** Reject every cell that holds a render and is not marked yet.
+ *
+ * The client knows the map's extent but not which coordinates carry anything,
+ * and most of a Hilbert-filled map is empty -- so this asks the server for a
+ * bitmap of occupied cells rather than rejecting the void as well.
+ */
+async function rejectRest() {
+  if (!overlay.masks) { marksMsg('no map loaded'); return; }
+  marksMsg('reading which tiles hold a render…');
+  let bits;
+  let side;
+  try {
+    const res = await fetch(`/map/${encodeURIComponent(state.name)}`
+      + `/leaves?z=${overlay.maskZ}`);
+    if (!res.ok) throw new Error(String(res.status));
+    side = Number(res.headers.get('X-Side')) || (1 << overlay.maskZ);
+    bits = new Uint8Array(await res.arrayBuffer());
+  } catch (err) {
+    marksMsg('the server could not report leaf coverage (store-only feature)');
+    return;
+  }
+  if (side !== (1 << overlay.maskZ)) {
+    marksMsg(`coverage came back at a different zoom (${side} vs ${1 << overlay.maskZ})`);
+    return;
+  }
+  if (!overlay.on.select) setOverlay('select', true);
+
+  const marked = {};
+  for (const key of GROUP_KEYS) {
+    marked[key] = overlay.masks[key].ctx.getImageData(0, 0, side, side).data;
+  }
+  const { ctx } = overlay.masks.reject;
+  ctx.fillStyle = GROUPS.reject.stored;
+  let added = 0;
+  for (let i = 0; i < side * side; i += 1) {
+    if (!(bits[i >> 3] & (0x80 >> (i & 7)))) continue;      // nothing rendered here
+    if (marked.approve[i * 4 + 3] || marked.reject[i * 4 + 3]) continue;
+    ctx.fillRect(i % side, (i / side) | 0, 1, 1);
+    added += 1;
+  }
+  overlay.counts.reject += added;
+  if (overlay.select) overlay.select.redraw();
+  renderSelectionInfo();
+  marksMsg(`rejected ${added} previously unmarked tile${added === 1 ? '' : 's'}`);
+}
+
+/* ------------------------------------------------------------------ wiring */
+
+el('marks-add').addEventListener('click', () => {
+  if (!overlay.count) { marksMsg('nothing marked on the map'); return; }
+  const snap = marksSnapshot();
+  snap.name = `${state.name || 'map'} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+  snap.map = state.name;
+  state.marks.unshift(snap);
+  if (storeMarks()) marksMsg(`saved ${snap.approve.length}✓ ${snap.reject.length}✕`);
+  renderMarks();
+});
+el('marks-clear').addEventListener('click', clearSelection);
+el('marks-reject-rest').addEventListener('click', rejectRest);
+el('marks-copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(JSON.stringify(
+    { map: state.name, zoom: overlay.maskZ, ...selectedTiles() }, null, 2)).then(
+    () => marksMsg('copied the current marks'),
+    () => marksMsg('the browser refused clipboard access'));
+});
+el('marks-search-approve').addEventListener('click', () => markMatches('approve'));
+el('marks-search-reject').addEventListener('click', () => markMatches('reject'));
+el('marks-search').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); markMatches('approve'); }
+});
+
+state.marks = loadMarks();
+renderMarks();
+// viewer.js restored the tab before 'marks' existed, so a session that was left
+// on it fell back to search.
+if (state.ui.tab === 'marks') setTab('marks');

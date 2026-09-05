@@ -46,6 +46,7 @@ border coloured when the tile is upscaled or over-zoomed rather than stored (key
     <div class="tabs" role="tablist">
       <button id="tab-search" class="tab active" role="tab">search</button>
       <button id="tab-saved" class="tab" role="tab">liked <span id="saved-count" class="badge"></span></button>
+      <button id="tab-marks" class="tab" role="tab">marks <span id="marks-count" class="badge"></span></button>
     </div>
 
     <section id="pane-search" class="pane-body" role="tabpanel">
@@ -65,6 +66,30 @@ border coloured when the tile is upscaled or over-zoomed rather than stored (key
       <ol id="saved-list" class="list"></ol>
       <div id="saved-empty" class="hint">Click a tile on the map, then “+ tile”.
         Drag to reorder, double-click a name to rename.</div>
+    </section>
+
+    <section id="pane-marks" class="pane-body" role="tabpanel" hidden>
+      <div class="actions">
+        <button id="marks-add" title="save the current marks as a named set">add</button>
+        <button id="marks-clear" title="clear the marks on the map (Esc)">clear</button>
+        <button id="marks-reject-rest" title="reject every tile that holds a render
+and is not marked yet — the last step of a triage pass">reject rest</button>
+        <button id="marks-copy" title="copy the current marks to the clipboard as JSON">copy</button>
+      </div>
+      <div id="marks-msg" class="hint"></div>
+
+      <input id="marks-search" type="search" autocomplete="off"
+             placeholder="mark by search: title, tags, prompt">
+      <div class="actions">
+        <button id="marks-search-approve" title="approve every render the query matches">approve matches</button>
+        <button id="marks-search-reject" title="reject every render the query matches">reject matches</button>
+      </div>
+      <div id="marks-search-hint" class="hint"></div>
+
+      <ol id="marks-list" class="list"></ol>
+      <div id="marks-empty" class="hint">Marks live on the map until you save them
+        here. Saved sets are kept in this browser; click one to load it back,
+        double-click a name to rename.</div>
     </section>
   </aside>
 

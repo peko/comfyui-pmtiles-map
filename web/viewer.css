@@ -180,3 +180,5 @@ pre {
 /* While selecting, the pointer is a tool rather than a hand. Leaflet adds
    .leaflet-crosshair itself once a drag starts; this covers the hover. */
 #map.selecting .leaflet-container { cursor: crosshair; }
+#pane-marks input[type="search"] { margin: 10px 0 4px; }
+#pane-marks .actions { flex-wrap: wrap; }

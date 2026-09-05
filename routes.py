@@ -407,6 +407,32 @@ def build_routes(maps_dir_fn):
             found = {"results": [], "truncated": False}
         return web.json_response(found, headers={"Cache-Control": "no-cache"})
 
+    @routes.get("/map/{name}/leaves")
+    async def leaves(request):
+        """A bitmap of which cells hold a render, for "mark everything else".
+
+        Raw bits rather than JSON: a z=8 map is 8 KB against ~1 MB of
+        coordinate triples, and the client wants a lookup table, not a list.
+        """
+        name = request.match_info["name"]
+        _require_map(maps_dir_fn(), name)
+        raw = request.query.get("z")
+        try:
+            zoom = None if raw in (None, "") else int(raw)
+        except ValueError:
+            raise web.HTTPBadRequest(reason="z must be an integer")
+        found = tilestore.read_occupancy(
+            os.path.join(maps_dir_fn(), f"{name}.tiles.db"), zoom)
+        if found is None:
+            raise web.HTTPNotFound(reason="no store to read leaf coverage from")
+        z, side, bits = found
+        return web.Response(
+            body=bits,
+            headers={"Content-Type": "application/octet-stream",
+                     "X-Zoom": str(z), "X-Side": str(side),
+                     "Cache-Control": "no-cache"},
+        )
+
     @routes.get("/map/{name}/changes")
     async def changes(request):
         """Which tiles changed since `since`. Omit `since` to just get the seq."""

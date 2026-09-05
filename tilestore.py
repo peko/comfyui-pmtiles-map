@@ -420,6 +420,40 @@ def read_tile_for_serving(db_path, z, x, y):
     return stored, True         # caller encodes; the blob is the lossless PNG
 
 
+def read_occupancy(db_path, zoom=None):
+    """Which cells at `zoom` have a leaf tile under them, as a packed bitmap.
+
+    Returns `(zoom, side, bytes)` -- one bit per cell, row-major, MSB first, so
+    a z=8 map is 8 KB whatever it holds.  The client needs this to answer "mark
+    everything I have not already looked at": it knows the map's extent but not
+    which of those millions of coordinates actually carry a render, and a list
+    of 19 494 triples is a megabyte of JSON to say what 8 KB of bits says.
+
+    `zoom` coarser than the leaf level sets a bit when *any* leaf falls under
+    the cell, which is what makes the answer usable at whatever granularity the
+    caller's own mask happens to be.
+    """
+    with reading(db_path) as db:
+        if db is None:
+            return None
+        row = db.execute(
+            "SELECT max(z) FROM tiles WHERE kind = ?", (LEAF,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        leaf_z = int(row[0])
+        z = leaf_z if zoom is None else max(0, min(int(zoom), leaf_z))
+        shift = leaf_z - z
+        side = 1 << z
+        bits = bytearray((side * side + 7) // 8)
+        for x, y in db.execute(
+            "SELECT x, y FROM tiles WHERE z = ? AND kind = ?", (leaf_z, LEAF)
+        ):
+            index = (y >> shift) * side + (x >> shift)
+            bits[index >> 3] |= 0x80 >> (index & 7)
+    return z, side, bytes(bits)
+
+
 def read_extent(db_path):
     """Zoom range, tile count and the deepest level's x/y span, from SQL only.
 

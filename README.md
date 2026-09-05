@@ -245,6 +245,36 @@ selection — and both cannot own the gesture, so `boxZoom` stands down while
 from the URL (`&select=1`, `&debug=1`), which wins over the stored preference,
 so a link can turn one on for someone whose last session had it off.
 
+#### The marks tab
+
+Marks live on the map until you save them, and the **marks** tab in the left
+pane is where they are kept:
+
+| | |
+|---|---|
+| `add` | save the current marks as a named set (rename by double-click) |
+| `clear` | clear the map's marks — the saved sets are untouched |
+| `reject rest` | reject every tile that **holds a render** and is not marked yet |
+| `copy` | the current marks to the clipboard, as JSON |
+
+plus a search box that marks by query: `approve matches` / `reject matches` take
+whatever the same search the sidebar uses returns, and mark each result's whole
+`nx × ny` block, because half a marked render is not a marked render.
+
+Together those are a triage pass: approve what you want, `reject rest`, done.
+That last step is the reason for the `leaves` route — the client knows the map's
+extent but not which of those coordinates carry anything, and on a
+Hilbert-filled map most of them do not. A list of 19 494 coordinate triples is
+about a megabyte of JSON to say what 8 KB of bits says, so the server sends the
+bits.
+
+Sets are kept in `localStorage` under `pmtiles.marks.v1`, as flat cell indices
+(`y * side + x`) per group rather than `{z, x, y}` objects — a full pass over a
+3249-render map is ~19 500 tiles, which is ~1 MB of objects against ~120 KB of
+integers, and the whole origin only gets about 5 MB. A set records the zoom it
+was made at and refuses to load onto a map that marks at a different
+granularity, rather than silently landing somewhere else.
+
 #### Outlining a region without a shape
 
 The textbook way to get an outline from a flat fill is `S - erode(S)`: draw the
@@ -304,6 +334,7 @@ an epsilon or `floor`/`ceil` silently takes an extra row.
 | `GET /map/{name}/meta.json` | header + whether a store is present |
 | `GET /map/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
 | `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
+| `GET /map/{name}/leaves?z=` | packed bitmap of which cells hold a render — 1 bit per cell, `X-Zoom`/`X-Side` headers |
 | `GET /map/{name}/render/{z}/{x}/{y}` | the original render, stitched; `?format=webp` |
 | `GET /map/{name}/search?q=` | title/tags/prompt, terms ANDed |
 | `POST /map/{name}/build` | recompose the pyramid and re-serialize, in a worker thread; `?pyramid=0` / `?archive=0` / `?min_zoom=` |
