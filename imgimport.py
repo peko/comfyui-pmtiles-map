@@ -91,6 +91,20 @@ def block_order_for(n_blocks):
     return order
 
 
+def block_grid_order(order, nx, ny):
+    """Largest square block grid that fits nx x ny blocks inside 2^order tiles.
+
+    The inverse of `zoom_for`: there the block count is known and the zoom
+    follows, here the zoom is fixed (it is the saver's `z`) and the question is
+    how many blocks fit.  The grid is square because the Hilbert curve is, and
+    the tighter axis decides -- 2x3 blocks on a z=8 level fit 128 across but
+    only 85 down, so 64x64 blocks it is, spanning 128x192 tiles.
+    """
+    side = 1 << int(order)
+    fit = min(side // max(1, int(nx)), side // max(1, int(ny)))
+    return max(0, max(1, fit).bit_length() - 1)
+
+
 def zoom_for(block_order, nx, ny):
     """Smallest zoom whose 2**z x 2**z tile grid holds the whole block grid.
 

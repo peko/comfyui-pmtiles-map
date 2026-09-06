@@ -109,9 +109,17 @@ Turns one integer into `x`/`y` along a Hilbert curve. Wire it into the saver's
 each other on the map *and* contiguously inside the archive, because PMTiles
 orders its tiles by the same curve.
 
-`block_size` is tiles per render (a 1024 px render at 256 px tiles is 4), so the
-curve walks blocks and multi-tile renders cannot overlap. At `z=5` with 4×4-tile
-renders, indices 0–3 give (0,0) (0,4) (4,4) (4,0).
+`block_size` is tiles per render along x (a 1024 px render at 256 px tiles is 4),
+so the curve walks blocks and multi-tile renders cannot overlap. At `z=5` with
+4×4-tile renders, indices 0–3 give (0,0) (0,4) (4,4) (4,0).
+
+**`block_size_y`** is the step along y when the render is not square — a
+960×1408 render at 512 px tiles is 2 wide by 3 tall. `0` means "same as
+`block_size`", so the input can be left alone. The curve still walks a square
+grid of blocks; only what a block *covers* is rectangular, and the tighter axis
+decides how many fit: 2×3 blocks on a `z=8` level fit 128 across but only 85
+down, so the grid is 64×64, spanning 128×192 tiles. That is the same layout
+`tools/pmtiles_import.py` arrives at for the same shape.
 
 ### PMTiles Map Info (`PMTilesMapInfo`)
 

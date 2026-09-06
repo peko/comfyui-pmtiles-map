@@ -15,10 +15,11 @@ from PIL import Image
 import folder_paths
 
 try:
-    from . import archive, hilbert, promptmeta, tilestore
+    from . import archive, hilbert, imgimport, promptmeta, tilestore
 except ImportError:                     # imported off the pack dir by tools/
     import archive
     import hilbert
+    import imgimport
     import promptmeta
     import tilestore
 
@@ -381,10 +382,18 @@ class HilbertXY:
                                   "tooltip": "grid is 2^order tiles a side -- use the "
                                              "same value as the saver's z"}),
                 "block_size": ("INT", {"default": 1, "min": 1, "max": 64,
-                                       "tooltip": "tiles per render (a 1024px render "
-                                                  "at 256px tiles is 4); x/y are "
-                                                  "scaled so blocks never overlap"}),
-            }
+                                       "tooltip": "tiles per render along x (a 1024px "
+                                                  "render at 256px tiles is 4); x/y "
+                                                  "are scaled so blocks never "
+                                                  "overlap"}),
+            },
+            "optional": {
+                "block_size_y": ("INT", {"default": 0, "min": 0, "max": 64,
+                                         "tooltip": "tiles per render along y, when a "
+                                                    "render is not square -- 960x1408 "
+                                                    "at 512px tiles is 2 wide by 3 "
+                                                    "tall. 0 = same as block_size"}),
+            },
         }
 
     RETURN_TYPES = ("INT", "INT", "STRING")
@@ -394,15 +403,19 @@ class HilbertXY:
     DESCRIPTION = ("Converts an integer index into x/y tile coordinates along a "
                    "Hilbert curve (the same curve PMTiles orders tiles by).")
 
-    def convert(self, index, order, block_size):
+    def convert(self, index, order, block_size, block_size_y=0):
         # With a block per render, the curve runs over blocks, not tiles, so the
-        # usable grid shrinks accordingly -- otherwise blocks would overlap.
-        side_blocks = max(1, (1 << order) // block_size)
-        block_order = max(0, side_blocks.bit_length() - 1)
+        # usable grid shrinks accordingly -- otherwise blocks would overlap. The
+        # steps differ per axis when the render does: the curve still walks a
+        # square grid of blocks, each block just covers bw x bh tiles.
+        bw = max(1, int(block_size))
+        bh = max(1, int(block_size_y) or bw)
+        block_order = imgimport.block_grid_order(order, bw, bh)
         bx, by = hilbert.d2xy(block_order, index)
-        x, y = bx * block_size, by * block_size
-        info = (f"index {index} -> {x},{y} (order {order}, {block_size}x{block_size} "
-                f"blocks on a {1 << block_order}x{1 << block_order} block grid)")
+        x, y = bx * bw, by * bh
+        side = 1 << block_order
+        info = (f"index {index} -> {x},{y} (order {order}, {bw}x{bh} blocks on a "
+                f"{side}x{side} block grid spanning {side * bw}x{side * bh} tiles)")
         return (x, y, info)
 
 

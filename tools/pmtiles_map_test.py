@@ -1266,6 +1266,41 @@ def main():
         except ValueError:
             check("an unknown mode is refused", True)
 
+    # ------------------------------------------------------------------ 23
+    print("23. Hilbert blocks with a different step per axis")
+
+    # 2x3-tile renders on a z=8 level: 128 fit across but only 85 down, so the
+    # square block grid is 64 -- which is what the importer independently picks
+    # for 3249 renders.
+    check("the tighter axis decides the block grid",
+          imgimport.block_grid_order(8, 2, 3) == 6,
+          str(imgimport.block_grid_order(8, 2, 3)))
+    check("a square block is unchanged by the addition",
+          [imgimport.block_grid_order(5, n, n) for n in (1, 2, 4)] == [5, 4, 3],
+          str([imgimport.block_grid_order(5, n, n) for n in (1, 2, 4)]))
+    check("a block larger than the level still yields a 1x1 grid",
+          imgimport.block_grid_order(2, 8, 8) == 0)
+
+    ORDER, BW, BH = 8, 2, 3
+    border = imgimport.block_grid_order(ORDER, BW, BH)
+    origins = [imgimport.block_origin(border, i, BW, BH) for i in range(1 << (2 * border))]
+    check("every block is distinct", len(set(origins)) == len(origins),
+          f"{len(set(origins))} of {len(origins)}")
+    check("and the steps really differ per axis",
+          sorted({x for x, _ in origins})[:3] == [0, 2, 4]
+          and sorted({y for _, y in origins})[:3] == [0, 3, 6],
+          f"x {sorted({x for x, _ in origins})[:3]} y {sorted({y for _, y in origins})[:3]}")
+    check("nothing lands outside the level",
+          max(x for x, _ in origins) + BW <= (1 << ORDER)
+          and max(y for _, y in origins) + BH <= (1 << ORDER),
+          f"spans {max(x for x, _ in origins) + BW}x{max(y for _, y in origins) + BH} "
+          f"of {1 << ORDER}")
+    steps = [(abs(origins[i + 1][0] // BW - origins[i][0] // BW)
+              + abs(origins[i + 1][1] // BH - origins[i][1] // BH))
+             for i in range(len(origins) - 1)]
+    check("consecutive indices are still adjacent blocks", set(steps) == {1},
+          str(sorted(set(steps))))
+
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):
             bench(args.out, n, ts, args.quality)
