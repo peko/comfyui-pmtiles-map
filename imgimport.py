@@ -19,9 +19,17 @@ exercise it without a store.
 import os
 import re
 
-import hilbert
-
 from PIL import Image
+
+# Same idiom as the rest of the pack: relative when ComfyUI loads this directory
+# as a package, absolute when tools/ put the directory on sys.path. A bare
+# `import hilbert` works only in the second case -- and since nodes.py imports
+# this module, getting it wrong takes the whole pack down with it: no nodes, no
+# /map/ route, nothing.
+try:
+    from . import hilbert
+except ImportError:
+    import hilbert
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".avif")
 

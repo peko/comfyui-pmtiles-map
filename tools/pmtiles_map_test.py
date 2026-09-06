@@ -1301,6 +1301,56 @@ def main():
     check("consecutive indices are still adjacent blocks", set(steps) == {1},
           str(sorted(set(steps))))
 
+    # ------------------------------------------------------------------ 24
+    print("24. the pack loads the way ComfyUI loads it")
+
+    # Every other check here imports the modules FLAT, with the pack directory on
+    # sys.path -- which is how tools/ use them and is exactly the mode in which a
+    # bare `import hilbert` inside a pack module works fine. ComfyUI imports the
+    # directory as a *package*, where the same line raises and takes the whole
+    # pack down: no nodes, no /map/. That is a one-line mistake with a total
+    # failure mode and nothing was catching it.
+    import importlib.util
+    import types
+
+    saved_fp = sys.modules.get("folder_paths")
+    stub = types.ModuleType("folder_paths")
+    stub.get_output_directory = lambda: args.out
+    sys.modules["folder_paths"] = stub
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "pmtiles_pack_undertest", os.path.join(PACK, "__init__.py"),
+            submodule_search_locations=[PACK])
+        pack = importlib.util.module_from_spec(spec)
+        sys.modules["pmtiles_pack_undertest"] = pack
+        error = None
+        try:
+            spec.loader.exec_module(pack)
+        except Exception as exc:                      # noqa: BLE001
+            error = f"{type(exc).__name__}: {exc}"
+        check("the pack imports as a package, not just off sys.path",
+              error is None, error or "")
+        check("and registers its nodes",
+              sorted(getattr(pack, "NODE_CLASS_MAPPINGS", {})) ==
+              ["HilbertXY", "PMTilesMapInfo", "SavePMTilesMap"],
+              str(sorted(getattr(pack, "NODE_CLASS_MAPPINGS", {}))))
+        if error is None:
+            node = pack.NODE_CLASS_MAPPINGS["HilbertXY"]()
+            check("HilbertXY still steps square by default",
+                  [node.convert(i, 5, 4)[:2] for i in range(4)]
+                  == [(0, 0), (0, 4), (4, 4), (4, 0)],
+                  str([node.convert(i, 5, 4)[:2] for i in range(4)]))
+            check("and rectangular when asked",
+                  [node.convert(i, 8, 2, 3)[:2] for i in range(3)]
+                  == [(0, 0), (2, 0), (2, 3)],
+                  str([node.convert(i, 8, 2, 3)[:2] for i in range(3)]))
+    finally:
+        sys.modules.pop("pmtiles_pack_undertest", None)
+        if saved_fp is None:
+            sys.modules.pop("folder_paths", None)
+        else:
+            sys.modules["folder_paths"] = saved_fp
+
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):
             bench(args.out, n, ts, args.quality)
