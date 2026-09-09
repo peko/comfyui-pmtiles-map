@@ -255,6 +255,14 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   liked. The unit is the *render*, not the tile — a 3×4-tile image gets one
   heart, not twelve — and it hides itself once a render is drawn smaller than
   one map tile, where the mark would cover what it marks.
+
+  Hovering does **no** network round trip, which is the difference between a
+  26 ms response and a second: renders sit on an aligned grid, so one measured
+  render's shape gives every block's origin arithmetically, and `/leaves`
+  supplies which cells hold a render at all — 8 KB for a whole z=8 map. Two
+  requests per archive, then nothing. Asking per render was measurably fine
+  locally (5 ms) and unusable against a ComfyUI busy with a graph, because the
+  request waits on the same event loop.
 * **Double-click a tile**: the full original render, stitched from the lossless
   store rather than the archive's WebP.
 * **The view lives in the URL** (`?map=&z=&x=&y=`), so refresh, bookmark and a

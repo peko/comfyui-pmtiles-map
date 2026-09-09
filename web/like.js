@@ -29,11 +29,26 @@ const LIKE_PX = 34;
  * outlive the click that removed it for the fade to be seen at all. */
 const LIKE_OUT_MS = 120;
 
-/* Hover resolution costs a /tilemeta fetch for a render never hovered before,
- * so a mousemove is debounced and every answer is kept. The map does not change
- * under us -- a render's block is fixed once written -- so the cache only grows.
+/* Hovering must not depend on the network.
+ *
+ * The first version asked /tilemeta for the tile under the cursor and read its
+ * `grid`. Locally that is 5 ms; against a ComfyUI that is busy rendering it is
+ * a second or two, because the request waits on the same event loop as the
+ * graph -- so the heart appeared long after the cursor had moved on.
+ *
+ * Two facts make it answerable offline instead:
+ *
+ *   * renders are laid on an *aligned* grid -- HilbertXY, auto_grid and the
+ *     importer all place a block at (bx*nx, by*ny) -- so one render's shape
+ *     determines every block's origin: floor(x/nx)*nx, floor(y/ny)*ny.
+ *   * /leaves already returns, in 8 KB for a whole z=8 map, one bit per cell
+ *     saying whether a render is there at all.
+ *
+ * So: two requests per archive, then pure arithmetic. The shape is still
+ * confirmed against the server in the background, and a map that turns out not
+ * to be aligned falls back to asking per render.
  */
-const HOVER_MS = 60;
+const HOVER_MS = 16;
 
 const like = {
   markers: new Map(),      // key -> L.marker, for liked renders in view
@@ -42,6 +57,11 @@ const like = {
   blocks: new Map(),       // "z/x/y" -> {z,x,y,nx,ny,title} | null
   timer: null,
   enabled: false,
+  shape: null,             // {nx, ny} once one render has been measured
+  aligned: true,           // until a render is found off the shape's grid
+  occupancy: null,         // Uint8Array, one bit per leaf cell
+  occupancySide: 0,
+  pending: false,
 };
 
 function likeKey(target) {
@@ -148,12 +168,26 @@ function toggleLike(target) {
   if (at >= 0) {
     state.saved.splice(at, 1);
   } else {
-    state.saved.push({
+    const entry = {
       map: state.name,
       z: target.z, x: target.x, y: target.y,
       nx: target.nx || 1, ny: target.ny || 1,
       name: (target.title || `${target.z}/${target.x}/${target.y}`).slice(0, 90),
-    });
+    };
+    state.saved.push(entry);
+    if (!target.title) {
+      // The block came from arithmetic, so the title was never fetched. Name it
+      // properly in the background -- a click can afford a round trip, a hover
+      // cannot, and the coordinates are already right either way.
+      const name = state.name;
+      fetchBlock({ z: target.z, x: target.x, y: target.y }).then((block) => {
+        if (!block || !block.title || name !== state.name) return;
+        if (!state.saved.includes(entry)) return;
+        entry.name = block.title.slice(0, 90);
+        storeSaved();
+        renderSaved();
+      });
+    }
   }
   storeSaved();
   renderSaved();          // the pane and the map show one list, not two
@@ -213,34 +247,105 @@ function clearHover() {
   like.hoverKey = null;
 }
 
-/** The render under a point, from its tile's own grid. Cached; null when the
- *  tile carries no render (a hole, or a derived aggregate). */
-async function blockUnder(latlng) {
+/** The leaf tile under a point, or null outside the level. */
+function tileUnder(latlng) {
   if (!state.meta) return null;
   const z = state.meta.max_zoom;
   const p = map.project(latlng, z);
-  const tx = Math.floor(p.x / TILE_PX);
-  const ty = Math.floor(p.y / TILE_PX);
-  if (tx < 0 || ty < 0 || tx >= 2 ** z || ty >= 2 ** z) return null;
-  const key = `${z}/${tx}/${ty}`;
+  const x = Math.floor(p.x / TILE_PX);
+  const y = Math.floor(p.y / TILE_PX);
+  if (x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) return null;
+  return { z, x, y };
+}
+
+/** Does a leaf cell hold a render? Unknown (null) until /leaves has arrived. */
+function occupied(tile) {
+  if (!like.occupancy || like.occupancySide !== 2 ** tile.z) return null;
+  const i = tile.y * like.occupancySide + tile.x;
+  return (like.occupancy[i >> 3] & (0x80 >> (i & 7))) !== 0;
+}
+
+/** One request per archive: which cells hold a render. */
+async function loadOccupancy(name) {
+  try {
+    const res = await fetch(`/map/${encodeURIComponent(name)}`
+      + `/leaves?z=${state.meta.max_zoom}`);
+    if (!res.ok) return;
+    const side = Number(res.headers.get('X-Side'));
+    const bits = new Uint8Array(await res.arrayBuffer());
+    if (name !== state.name) return;             // archive switched mid-flight
+    like.occupancy = bits;
+    like.occupancySide = side;
+  } catch (err) { /* fall back to asking per render */ }
+}
+
+/** The render containing a tile, computed from the learned shape. */
+function blockFromShape(tile) {
+  const { nx, ny } = like.shape;
+  return {
+    z: tile.z,
+    x: Math.floor(tile.x / nx) * nx,
+    y: Math.floor(tile.y / ny) * ny,
+    nx,
+    ny,
+  };
+}
+
+/** Ask the server for a tile's real block, and learn from the answer. */
+async function fetchBlock(tile) {
+  const key = `${tile.z}/${tile.x}/${tile.y}`;
   if (like.blocks.has(key)) return like.blocks.get(key);
-  const meta = await fetchTileMeta({ z, x: tx, y: ty });
+  const meta = await fetchTileMeta(tile);
   let block = null;
   if (meta && meta.kind !== 'derived') {
     const grid = (Array.isArray(meta.grid) && meta.grid.length === 4)
       ? meta.grid.map(Number) : [0, 0, 1, 1];
     block = {
-      z, x: tx - grid[0], y: ty - grid[1], nx: grid[2], ny: grid[3],
-      title: meta.title || '',
+      z: tile.z, x: tile.x - grid[0], y: tile.y - grid[1],
+      nx: grid[2], ny: grid[3], title: meta.title || '',
     };
+    if (!like.shape) like.shape = { nx: block.nx, ny: block.ny };
+    // A grid the arithmetic cannot predict: stop trusting it rather than
+    // drawing hearts on the wrong corners.
+    if (like.shape.nx !== block.nx || like.shape.ny !== block.ny
+        || block.x % like.shape.nx || block.y % like.shape.ny) {
+      like.aligned = false;
+    }
   }
   like.blocks.set(key, block);
   return block;
 }
 
-async function hoverAt(latlng) {
+/** The render under a point, without waiting on the network where possible. */
+function blockUnder(latlng) {
+  const tile = tileUnder(latlng);
+  if (!tile) return null;
+  const key = `${tile.z}/${tile.x}/${tile.y}`;
+  if (like.blocks.has(key)) return like.blocks.get(key);
+  if (like.shape && like.aligned) {
+    const here = occupied(tile);
+    if (here === false) return null;             // known empty, no request
+    if (here === true) return blockFromShape(tile);
+  }
+  return undefined;                              // not knowable locally yet
+}
+
+function hoverAt(latlng) {
   if (!like.enabled) return;
-  const block = await blockUnder(latlng);
+  const block = blockUnder(latlng);
+  if (block === undefined) {
+    // Only reachable before the first render has been measured on this
+    // archive, or on a map whose grid is not aligned. One request, then the
+    // answer is arithmetic from here on.
+    const tile = tileUnder(latlng);
+    if (!tile || like.pending) return;
+    like.pending = true;
+    fetchBlock(tile).finally(() => { like.pending = false; }).then(() => {
+      // Re-run against the cursor's *current* position, not this stale one.
+      if (like.last) hoverAt(like.last);
+    });
+    return;
+  }
   if (!block) { clearHover(); return; }
   const key = likeKey(block);
   if (key === like.hoverKey) return;             // same render, nothing to do
@@ -253,9 +358,11 @@ async function hoverAt(latlng) {
 
 map.on('mousemove', (ev) => {
   if (!like.enabled) return;
+  like.last = ev.latlng;
+  // A frame's worth of coalescing, not a wait: resolution is local, so there is
+  // nothing to debounce against beyond doing it once per pointer burst.
   clearTimeout(like.timer);
-  const { latlng } = ev;
-  like.timer = setTimeout(() => hoverAt(latlng), HOVER_MS);
+  like.timer = setTimeout(() => hoverAt(like.last), HOVER_MS);
 });
 
 // Leaving the map, or leaving for the heart itself, are different things: the
@@ -279,5 +386,10 @@ function likesMapChanged() {
   like.markers.clear();
   clearHover();
   like.blocks.clear();           // grids belong to the archive that was loaded
+  like.shape = null;
+  like.aligned = true;
+  like.occupancy = null;
+  like.occupancySide = 0;
   refreshLikes();
+  if (state.name && state.meta) loadOccupancy(state.name);
 }
