@@ -307,6 +307,9 @@ function showMap(info) {
   // overlays.js, if it loaded: the canvas layers take their tile size from the
   // archive, so they have to be rebuilt when the archive changes.
   if (typeof overlaysMapChanged === 'function') overlaysMapChanged(info);
+  // like.js, likewise: the hearts are placed in archive coordinates, and the
+  // liked list is filtered by map name.
+  if (typeof likesMapChanged === 'function') likesMapChanged();
 
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
@@ -753,6 +756,9 @@ function markActive() {
 }
 
 function renderSaved() {
+  // like.js draws a heart on every liked render in view, so any edit here --
+  // delete, reorder, paste -- has to reach the map as well.
+  if (typeof refreshLikes === 'function') refreshLikes();
   const list = el('saved-list');
   highlight(null);                   // rows are about to be replaced under the cursor
   list.textContent = '';

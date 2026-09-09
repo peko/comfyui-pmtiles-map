@@ -249,6 +249,12 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 * **Liked list**: saved points of interest in `localStorage`, drag to reorder,
   double-click to rename, copy/paste the list as JSON to move it between
   browsers. Hovering any row outlines the target on the map.
+* **A heart on the render itself**: hovering a render puts one in its top-right
+  corner; clicking likes it, clicking again removes it. Pink on hover so the
+  outcome of the click is visible before committing, and permanently pink once
+  liked. The unit is the *render*, not the tile — a 3×4-tile image gets one
+  heart, not twelve — and it hides itself once a render is drawn smaller than
+  one map tile, where the mark would cover what it marks.
 * **Double-click a tile**: the full original render, stitched from the lossless
   store rather than the archive's WebP.
 * **The view lives in the URL** (`?map=&z=&x=&y=`), so refresh, bookmark and a

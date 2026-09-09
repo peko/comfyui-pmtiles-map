@@ -206,3 +206,43 @@ pre {
   padding: 2px 6px 2px 0;
 }
 .help .keys td { color: var(--dim); padding: 2px 6px 2px 0; vertical-align: top; }
+
+/* The heart drawn on a render itself (like.js). Grey while hovered, pink once
+   liked and then permanent. No plate behind it -- a drop shadow carries it over
+   a pale render as well as a dark one, and leaves the picture unobscured, which
+   is the whole reason the heart is a corner mark rather than a panel. */
+.pm-like {
+  display: flex; align-items: center; justify-content: center;
+  /* 20% darker than the near-white it was, so the unliked state reads as an
+     offer rather than as something already on. */
+  color: rgba(181, 184, 190, .92);
+  font-size: 30px; line-height: 1;
+  cursor: pointer;
+  /* One tight shadow only. The soft wide one muddied the art under the corner
+     without making the glyph any more legible. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .9));
+  transition: color .1s ease-out, transform .1s ease-out;
+  animation: pm-like-in .12s ease-out;
+}
+/* Hovering the heart previews what clicking it does: it goes pink before the
+   click rather than merely brightening, so the gesture's outcome is visible
+   without committing to it. */
+.pm-like:hover { color: #ff5f9e; transform: scale(1.18); }
+.pm-like.liked { color: #ff5f9e; }
+/* Already liked, so the hover has to say "remove" instead -- a lift and a
+   lighter pink, since going darker would read as more-liked. */
+.pm-like.liked:hover { color: #ff9cc4; }
+.pm-like span { pointer-events: none; }
+
+/* Fast in, fast out. The out state is applied by like.js, which then removes
+   the marker once the animation has had its ~110 ms. */
+@keyframes pm-like-in {
+  from { opacity: 0; transform: scale(.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.pm-like.leaving {
+  opacity: 0;
+  transform: scale(.6);
+  transition: opacity .11s ease-in, transform .11s ease-in;
+  pointer-events: none;
+}

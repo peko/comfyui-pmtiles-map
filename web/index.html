@@ -149,6 +149,12 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 
       <h3>liked</h3>
       <p>Points of interest, kept in this browser.</p>
+      <p class="hint">Hovering a render on the map puts a heart in its top-right
+        corner — click it to like the render, click again to remove. It turns
+        pink on hover to show what the click will do, and a liked render keeps
+        its pink heart whether the cursor is there or not. The heart is hidden
+        once a render is drawn smaller than one map tile, since below that it
+        would cover the picture it marks.</p>
       <dl>
         <dt>+ tile</dt><dd>save the tile selected on the map (<kbd>s</kbd>)</dd>
         <dt>drag a row</dt><dd>reorder · double-click a name to rename ·
@@ -229,5 +235,6 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 <script src="assets/vendor/leaflet/leaflet.js"></script>
 <script src="assets/viewer.js"></script>
 <script src="assets/overlays.js"></script>
+<script src="assets/like.js"></script>
 </body>
 </html>
