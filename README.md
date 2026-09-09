@@ -257,12 +257,14 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   one map tile, where the mark would cover what it marks.
 
   Hovering does **no** network round trip, which is the difference between a
-  26 ms response and a second: renders sit on an aligned grid, so one measured
-  render's shape gives every block's origin arithmetically, and `/leaves`
-  supplies which cells hold a render at all — 8 KB for a whole z=8 map. Two
-  requests per archive, then nothing. Asking per render was measurably fine
-  locally (5 ms) and unusable against a ComfyUI busy with a graph, because the
-  request waits on the same event loop.
+  30 ms response and a second. Which tiles form one image follows from the tile
+  size and the render's size in tiles, and both are properties of the map:
+  `render_block` (`"3x4"`) arrives with `meta.json`, renders sit on an aligned
+  grid, so the block containing any tile is `floor(x/nx)*nx, floor(y/ny)*ny`.
+  `/leaves` says which cells hold a render at all — 8 KB for a whole z=8 map,
+  once per archive. Asking the server per render was fine locally (5 ms) and
+  unusable against a ComfyUI busy with a graph, since the request waits on the
+  same event loop.
 * **Double-click a tile**: the full original render, stitched from the lossless
   store rather than the archive's WebP.
 * **The view lives in the URL** (`?map=&z=&x=&y=`), so refresh, bookmark and a
@@ -425,6 +427,10 @@ per-tab actions for search, liked and marks.
 | `GET /map/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
 | `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
 | `GET /map/{name}/leaves?z=` | packed bitmap of which cells hold a render — 1 bit per cell, `X-Zoom`/`X-Side` headers |
+
+`meta.json` also carries **`render_block`** (`"3x4"`): how many tiles one render
+occupies. Recorded by the saver and the importer, it is what lets a client work
+out which tiles belong to the same image locally instead of asking per tile.
 | `GET /map/{name}/render/{z}/{x}/{y}` | the original render, stitched; `?format=webp` |
 | `GET /map/{name}/search?q=` | title/tags/prompt, terms ANDed |
 | `POST /map/{name}/build` | recompose the pyramid and re-serialize, in a worker thread; `?pyramid=0` / `?archive=0` / `?min_zoom=` |

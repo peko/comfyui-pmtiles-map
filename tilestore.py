@@ -504,6 +504,8 @@ def read_extent(db_path):
             "SELECT value FROM map_meta WHERE key='pyramid_mode'").fetchone()
         pmin = db.execute(
             "SELECT value FROM map_meta WHERE key='pyramid_min_px'").fetchone()
+        block = db.execute(
+            "SELECT value FROM map_meta WHERE key='render_block'").fetchone()
       except sqlite3.Error:
         return None
     return {
@@ -514,6 +516,9 @@ def read_extent(db_path):
         "pyramid_stale": (stale[0] == "1") if stale else (minz == maxz and count > 1),
         "pyramid_mode": pmode[0] if pmode and pmode[0] in PYRAMID_MODES else PYRAMID_SCALE,
         "pyramid_min_px": int(pmin[0]) if pmin and pmin[0] else MIN_CONTENT_PX,
+        # "NxM": tiles one render occupies, so a client can tell which tiles form
+        # one image without asking per tile.
+        "render_block": block[0] if block and block[0] else None,
     }
 
 

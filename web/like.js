@@ -36,17 +36,20 @@ const LIKE_OUT_MS = 120;
  * a second or two, because the request waits on the same event loop as the
  * graph -- so the heart appeared long after the cursor had moved on.
  *
- * Two facts make it answerable offline instead:
+ * It does not have to be a question for the server at all. Which tiles form one
+ * image follows from two numbers -- the tile size and the render's size in tiles
+ * -- and both are properties of the *map*:
  *
- *   * renders are laid on an *aligned* grid -- HilbertXY, auto_grid and the
- *     importer all place a block at (bx*nx, by*ny) -- so one render's shape
- *     determines every block's origin: floor(x/nx)*nx, floor(y/ny)*ny.
- *   * /leaves already returns, in 8 KB for a whole z=8 map, one bit per cell
- *     saying whether a render is there at all.
+ *   * `render_block` ("3x4") comes with meta.json, recorded by the saver and the
+ *     importer. Renders sit on an aligned grid (HilbertXY, auto_grid and the
+ *     importer all place a block at (bx*nx, by*ny)), so the origin of the block
+ *     containing any tile is floor(x/nx)*nx, floor(y/ny)*ny.
+ *   * `/leaves` says which cells hold a render at all -- 8 KB for a whole z=8
+ *     map, one bit per cell, fetched once per archive.
  *
- * So: two requests per archive, then pure arithmetic. The shape is still
- * confirmed against the server in the background, and a map that turns out not
- * to be aligned falls back to asking per render.
+ * So hovering costs nothing. A map written before `render_block` existed has no
+ * shape to read, and one /tilemeta then learns it; a map whose grid turns out
+ * not to be aligned gives up on the arithmetic and asks per render.
  */
 const HOVER_MS = 16;
 
@@ -379,6 +382,15 @@ map.on('zoomend moveend', () => {
 });
 
 /** Called by showMap: a new archive means new coordinates and a new list. */
+/** "3x4" -> {nx: 3, ny: 4}, or null. */
+function parseBlock(text) {
+  const m = /^(\d+)x(\d+)$/.exec(String(text || '').trim());
+  if (!m) return null;
+  const nx = Number(m[1]);
+  const ny = Number(m[2]);
+  return (nx > 0 && ny > 0) ? { nx, ny } : null;
+}
+
 function likesMapChanged() {
   // No fade here: the layer is being torn down, and a marker outliving its
   // archive by 120 ms would be placed with the next archive's coordinates.
@@ -386,7 +398,8 @@ function likesMapChanged() {
   like.markers.clear();
   clearHover();
   like.blocks.clear();           // grids belong to the archive that was loaded
-  like.shape = null;
+  // The map says what shape its renders are, so there is nothing to learn.
+  like.shape = parseBlock(state.meta && state.meta.render_block);
   like.aligned = true;
   like.occupancy = null;
   like.occupancySide = 0;

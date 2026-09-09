@@ -272,6 +272,12 @@ class SavePMTilesMap:
             # So a tile the viewer encodes on demand matches what the archive
             # build wants, instead of the two overwriting each other's cache.
             store.set_map_meta("webp_quality", int(webp_quality))
+            # The shape of one render, in tiles. The viewer needs it to know
+            # which tiles form one image; deriving that per tile from `grid`
+            # costs a request per render hovered -- unaffordable against a busy
+            # server, and unnecessary, since the shape is a property of the map
+            # rather than of the tile.
+            store.set_map_meta("render_block", f"{nx}x{ny}")
             pending = store.bump_pending(len(placed) + len(derived))
             store.db.commit()
             stats = store.stats()

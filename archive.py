@@ -316,6 +316,10 @@ def archive_info(path):
         "pyramid_min_px": int(tilestore.read_map_meta(
             f"{os.path.splitext(path)[0]}.tiles.db", "pyramid_min_px",
             tilestore.MIN_CONTENT_PX) or tilestore.MIN_CONTENT_PX),
+        # "NxM": tiles one render occupies. The viewer needs it to know which
+        # tiles form one image, which is otherwise a request per tile.
+        "render_block": tilestore.read_map_meta(
+            f"{os.path.splitext(path)[0]}.tiles.db", "render_block", None),
         "bytes": os.path.getsize(path),
         "mtime": os.stat(path).st_mtime,
     }
@@ -404,6 +408,7 @@ def store_info(db_path):
         "pyramid_stale": extent["pyramid_stale"],
         "pyramid_mode": extent["pyramid_mode"],
         "pyramid_min_px": extent["pyramid_min_px"],
+        "render_block": extent["render_block"],
         "bytes": os.path.getsize(db_path),
         "mtime": os.stat(db_path).st_mtime,
     }
