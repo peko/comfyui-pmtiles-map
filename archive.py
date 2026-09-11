@@ -320,6 +320,15 @@ def archive_info(path):
         # tiles form one image, which is otherwise a request per tile.
         "render_block": tilestore.read_map_meta(
             f"{os.path.splitext(path)[0]}.tiles.db", "render_block", None),
+        # The store's own extent, which is the live one.
+        #
+        # A viewer reading tiles from the store must bound itself by the store,
+        # not by this header: with archive_every batching (or write_archive off)
+        # the archive lags by up to that many tiles, and Leaflet refuses to even
+        # request a tile outside options.bounds -- so the newest row of renders
+        # is served, present, and never asked for. Stale bounds are indisting-
+        # uishable from missing tiles.
+        **_store_extent(f"{os.path.splitext(path)[0]}.tiles.db"),
         "bytes": os.path.getsize(path),
         "mtime": os.stat(path).st_mtime,
     }
@@ -370,6 +379,22 @@ def stitch_render(db_path, archive_path, z, x, y, tile_size=None):
     if canvas is None:
         return None
     return canvas, (z, ox, oy), (nx, ny), source
+
+
+def _store_extent(db_path):
+    """`store_*` keys describing the store beside an archive, or {} if none."""
+    if not os.path.isfile(db_path):
+        return {}
+    extent = tilestore.read_extent(db_path)
+    if not extent:
+        return {}
+    return {
+        "store_bounds": list(bounds_of([(extent["max_zoom"], extent["x0"], extent["y0"]),
+                                        (extent["max_zoom"], extent["x1"], extent["y1"])])),
+        "store_min_zoom": extent["min_zoom"],
+        "store_max_zoom": extent["max_zoom"],
+        "store_tiles": extent["tiles"],
+    }
 
 
 def store_info(db_path):

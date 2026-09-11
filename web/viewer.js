@@ -172,6 +172,31 @@ function sourceFor(info) {
   return info.has_store ? 'store' : 'archive';
 }
 
+/** How far the map reaches: the archive's extent UNIONED with the store's.
+ *
+ * The two disagree during a run. Tiles are served from the store, but the
+ * archive's header only moves when the archive is re-serialized -- with
+ * `archive_every` batching, or `write_archive` off, it lags by up to that many
+ * tiles. Bounding the layer by the stale one makes Leaflet refuse to *request*
+ * the newest renders (`GridLayer._isValidTile`), so they are saved, served on
+ * demand, announced by the change feed, and never fetched: the last row of the
+ * map is simply missing, which reads as a clipped image rather than as stale
+ * bounds.
+ *
+ * The union rather than the store's alone, because it can only ever admit a
+ * request. A tile that turns out not to exist comes back as the transparent
+ * placeholder, which costs one request; a tile wrongly refused cannot be
+ * recovered without a reload.
+ */
+function mapExtent(info) {
+  const a = info.bounds;
+  const b = info.store_bounds;
+  if (!Array.isArray(b) || b.length !== 4) return a;
+  if (!Array.isArray(a) || a.length !== 4) return b;
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+          Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
 /** Map zoom - tile zoom, for an archive whose tiles are bigger than 256 px. */
 function zoomShift(tileSize) {
   return Math.max(0, Math.round(Math.log2((Number(tileSize) || 256) / TILE_PX)));
@@ -191,13 +216,13 @@ function showMap(info) {
   state.shift = shift;
   state.floorZoom = floor;
   state.ceilingZoom = ceiling;
-  const [w, s, e, n] = info.bounds;
+  const [w, s, e, n] = mapExtent(info);
   const bounds = L.latLngBounds([[s, w], [n, e]]);
   // Kept so the poll and the change feed can widen it: GridLayer._isValidTile
   // refuses to REQUEST a tile outside options.bounds, and a run that grows the
   // map past the extent it had at page load would otherwise be invisible until
   // a reload -- renders landing, feed reporting them, no tile ever fetched.
-  state.boundsKey = info.bounds.join(',');
+  state.boundsKey = mapExtent(info).join(',');
 
   // Drop the outgoing layer before touching the zoom: a clamp below would
   // otherwise send it fetching tiles for the map we are leaving.
@@ -1181,10 +1206,11 @@ async function refreshMaps({ initial = false } = {}) {
     // A map grows sideways as well as deeper, and the layer's bounds are what
     // decide whether a tile is even requested. Track the extent, or every render
     // past the page-load extent stays invisible.
-    const key = (target.bounds || []).join(',');
+    const extent = mapExtent(target);
+    const key = (extent || []).join(',');
     if (key && key !== state.boundsKey) {
       state.boundsKey = key;
-      const [bw, bs, be, bn] = target.bounds;
+      const [bw, bs, be, bn] = extent;
       state.layer.options.bounds = L.latLngBounds([[bs, bw], [bn, be]]);
       map.fire('moveend');
     }

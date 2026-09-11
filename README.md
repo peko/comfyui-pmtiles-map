@@ -428,6 +428,13 @@ per-tab actions for search, liked and marks.
 | `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
 | `GET /map/{name}/leaves?z=` | packed bitmap of which cells hold a render — 1 bit per cell, `X-Zoom`/`X-Side` headers |
 
+`meta.json` and `/map/list` also carry **`store_bounds`** / `store_min_zoom` /
+`store_max_zoom` / `store_tiles` whenever a store exists. The header's own
+bounds only move when the archive is re-serialized, so during a run they lag by
+up to `archive_every` tiles — and a viewer reading tiles from the *store* while
+bounding itself by the *archive* will not even request the newest renders.
+The viewer takes the union of the two.
+
 `meta.json` also carries **`render_block`** (`"3x4"`): how many tiles one render
 occupies. Recorded by the saver and the importer, it is what lets a client work
 out which tiles belong to the same image locally instead of asking per tile.
