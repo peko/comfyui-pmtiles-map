@@ -25,6 +25,15 @@ import time
 
 from PIL import Image
 
+# Relative when the pack is imported as a package, absolute when tools/ put the
+# directory on sys.path -- the same dance as imgimport, and for the same reason:
+# getting it wrong takes the whole pack down. `hilbert` pulls in only
+# pmtiles.tile, so this adds no cycle.
+try:
+    from . import hilbert
+except ImportError:
+    import hilbert
+
 LEAF = "leaf"
 DERIVED = "derived"
 
@@ -841,6 +850,41 @@ class TileStore:
                 break
         raise ValueError(f"no free {nx}x{ny} block at z={z}")
 
+    def next_free_hilbert_block(self, z, nx=1, ny=1, limit=1 << 20):
+        """First free nx x ny block at zoom z, walking the **Hilbert curve**.
+
+        Same bookkeeping-free placement as `next_free_block`, different
+        traversal. Shells keep a map compact on screen; the curve does that
+        *and* keeps consecutive renders contiguous **inside the archive**,
+        because PMTiles orders its tiles by Hilbert id. A viewer panning across
+        neighbours then fetches byte ranges that are already next to each other.
+
+        The curve walks a square grid of *blocks*, not tiles, so multi-tile
+        renders cannot overlap -- the same arrangement `HilbertXY` produces when
+        wired to x/y by hand. This mode is that node's job done in-place, for
+        when there is no counter to drive it from.
+        """
+        occupied = self.leaf_cells(z)
+        order = hilbert.block_grid_order(z, nx, ny)
+        side = 1 << order
+        if side * max(nx, ny) > (1 << z) or (1 << z) // max(nx, 1) < 1 \
+                or (1 << z) // max(ny, 1) < 1:
+            raise ValueError(f"a {nx}x{ny} tile block does not fit at z={z}")
+
+        def free(bx, by):
+            ox, oy = bx * nx, by * ny
+            return all(
+                (ox + dx, oy + dy) not in occupied
+                for dx in range(nx)
+                for dy in range(ny)
+            )
+
+        for index in range(min(side * side, limit)):
+            bx, by = hilbert.d2xy(order, index)
+            if free(bx, by):
+                return bx * nx, by * ny
+        raise ValueError(f"no free {nx}x{ny} block at z={z} along the curve")
+
     # ---------------------------------------------------------------- pyramid
 
     def leaf_zoom(self):
@@ -990,8 +1034,8 @@ class TileStore:
         `depth` recompositions per render and rewrites the shallow tiles once per
         render -- on a full z=8 map the z=0 tile would be rebuilt 65536 times.
         Measured on 256 leaves at z=4: 1024 recompositions and 4.2 s per-save,
-        against 85 and 0.6 s in one pass. Hence `pyramid_to_zoom == z` while
-        rendering, then this at the end.
+        against 85 and 0.6 s in one pass. Hence the saver writes leaves only,
+        and this runs once at the end.
 
         `progress(level, done, total)` is called per level, if given.
         """

@@ -37,37 +37,48 @@ Developed against ComfyUI 0.30 / Python 3.13; nothing in it is version-specific.
 
 ### Save PMTiles Map Tile (`SavePMTilesMap`)
 
-Writes each image into the archive at `z/x/y` and rebuilds the coarser pyramid
-levels down to `pyramid_to_zoom`.
+Writes each image into the map's tile store at `z/x/y`. **Leaves only** — the
+coarser pyramid levels and the `.pmtiles` archive are built afterwards, in one
+pass, by the viewer's build button or `tools/pmtiles_map.py`.
+
+That is not a limitation, it is the point. Both jobs are O(whole map) and
+neither gets cheaper for being done per render: recomposing ancestors is one
+pass per level per image and rewrites the shallow tiles once per image (65536
+times for `z=0` on a full `z=8` map), and the archive is re-serialized *whole*
+every time — 135 MB per render on a 20k-tile map. Doing either every N images
+only changes how often the waste happens. Nothing waits on it either: the viewer
+reads tiles from the store, so a render is on the map the moment it is saved.
+
+The inputs are split **basic / advanced** — the advanced ones are hidden until
+the node's Advanced toggle is on (or `Comfy.Node.AlwaysShowAdvancedWidgets`
+is set), and outlined differently when shown. Basic is what changes per
+render; advanced describes the *map*, which is set once when it is created.
+
+**Basic:** `images`, `map_name`, `x`, `y`, `title`, `preview`.
 
 | input | meaning |
 |---|---|
 | `images` | renders to place; every image in a batch gets its own cell |
 | `map_name` | writes `output/maps/<name>.pmtiles` and `<name>.tiles.db` |
-| `z` | zoom level the render is placed on — the deepest level of the map |
-| `x`, `y` | tile coordinates at that zoom; ignored when `coords_mode` is `auto_grid`. Can be wired instead of typed |
-| `placement` | `slice` cuts the render into a tile grid at native pixels (1024² at 256 px → 4×4 tiles, which is exactly one tile at `z-2`); `single_tile` resizes the whole render into one tile |
-| `coords_mode` | `manual` uses `x`/`y`; `auto_grid` takes the next free block, scanning in growing squares so re-queueing grows a compact map |
-| `tile_size` | 256 or 512. One tile size per map — the store refuses to mix |
-| `webp_quality` | quality of the tiles written into the `.pmtiles`; independent of how the store keeps its own |
-| `store_format` | how tiles are kept in the store — `png` (default), `webp_lossless`, `webp_lossy`. See below |
-| `store_quality` | quality for `webp_lossy` only. Default 92 — this is the source of truth, so keep it above `webp_quality` |
-| `pyramid_to_zoom` | build derived levels down to this zoom (`0` = a single world tile) |
-| `y_scheme` | how to read the `y` input: `xyz` (y from the top, Leaflet/PMTiles) or `tms`. Tiles are always *stored* XYZ |
-| `write_archive` | whether the saver ever writes the `.pmtiles` at all. Off = manual only (the viewer's build button or the CLI) |
-| `archive_every` *(optional)* | when `write_archive` is on, how many tiles must be waiting before it rewrites. `0` = every save |
-| `embed_tile_metadata` | carry per-tile records inside the archive, so the single file is self-describing |
-| `store_full_prompt` | additionally keep the entire prompt graph per tile in the store |
-| `title`, `tags` | free text, shown in the viewer and searchable |
-| `preview` *(optional)* | the thumbnail the node shows in the graph, written to `ComfyUI/temp`: `thumbnail` (384 px WebP, ~42 KB, default), `full` (the whole render, ~2.8 MB), `off` (nothing) |
-| `prompt_text`, `negative_text` *(optional)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text`. Single-line: the frontend's `addMultilineWidget` hardcodes `minNodeSize = [400, 200]` with no height option, so one multiline field would set the node's minimum size, and these are meant to be wired rather than typed |
+| `z` *(advanced)* | zoom level the render is placed on — the deepest level of the map. The extent is `2^z` tiles a side and a block must fit inside it, so a sweep of `R` rows at `h` tiles each needs `R*h <= 2^z`. Default **10** (1024 a side); depth is free, empty levels cost nothing |
+| `x`, `y` | tile coordinates at that zoom, **XYZ** — `y` counts from the top, and a multi-tile block is addressed by its top-left corner. Ignored when `coords_mode` is `auto_grid`. Can be wired instead of typed |
+| `placement` *(advanced)* | `slice` cuts the render into a tile grid at native pixels (1024² at 256 px → 4×4 tiles, which is exactly one tile at `z-2`); `single_tile` resizes the whole render into one tile |
+| `coords_mode` *(advanced)* | `manual` uses `x`/`y`. `auto_grid` ignores them and takes the next free block, scanning in growing squares so re-queueing grows a compact map. **`hilbert`** does the same along the Hilbert curve, so neighbours on the map are neighbours *inside the archive* too. Neither automatic mode keeps a counter — both read what the map already holds |
+| `tile_size` *(advanced)* | 256 or 512. One tile size per map — the store refuses to mix |
+| `store_format` *(advanced)* | how tiles are kept in the store — `webp_lossy` (default), `webp_lossless`, `png`. See below |
+| `store_quality` *(advanced)* | quality for `webp_lossy` only. **Default 80.** The map's *one* quality number: serving passes these bytes straight through, and the archive build re-encodes at the same value. Overridable per build (`--quality`, `--webp-quality`) when an upload should be smaller than the working copy |
+| `store_full_prompt` *(advanced)* | additionally keep the entire prompt graph per tile in the store |
+| `title` | free text, shown in the viewer and searchable |
+| `tags` *(advanced)* | same, and what the viewer's search filters on |
+| `prompt_text`, `negative_text` *(advanced)* | the prompt to record when the graph **builds it at runtime** (`FormattedString`, wildcards, a list selector) and it therefore cannot be read off the graph — wire the same string that feeds `CLIPTextEncode.text`. Single-line: the frontend's `addMultilineWidget` hardcodes `minNodeSize = [400, 200]` with no height option, so one multiline field would set the node's minimum size, and these are meant to be wired rather than typed |
+| `preview` *(last)* | the thumbnail the node shows in the graph, written to `ComfyUI/temp`: `thumbnail` (384 px WebP, ~42 KB, default), `full` (the whole render, ~2.8 MB), `off` (nothing). Sits at the bottom because it is the one input that changes nothing about the map |
 
 Outputs `images` (passthrough, so it can sit mid-chain) and `info` (what was
 placed where).
 
 ### How tiles are kept in the store
 
-The archive is always WebP at `webp_quality`. `store_format` is about the
+The archive is always WebP, at the store's own quality. `store_format` is about the
 **source of truth** behind it, and it matters because a big map is mostly store:
 341 KB a tile x 65536 tiles is 22 GB.
 
@@ -76,24 +87,36 @@ image (PSNR against the lossless pyramid):
 
 | `store_format` | per tile | encode | leaf | z-1 | z-2 |
 |---|---|---|---|---|---|
-| `png` (default) | 341 KB | 17 ms | — | — | — |
+| `png` | 341 KB | 17 ms | — | — | — |
 | `webp_lossless` | **238 KB** | 84 ms | **inf** | **inf** | **inf** |
 | `webp_lossy` q95 | ~60 KB | ~20 ms | 45.2 dB | 40.8 | 37.2 |
-| `webp_lossy` q80 | ~34 KB | 16 ms | 41.3 dB | 36.7 | 33.8 |
+| `webp_lossy` q80 **(default)** | ~34 KB | 16 ms | 41.3 dB | 36.7 | 33.8 |
 
-**`webp_lossless` is the free one** — a third smaller for pixels that come back
-bit for bit, verified against the source array and against the derived pyramid.
-It is not the default only because switching an existing map's format is
-something to ask for rather than inherit. It also removes the encode cache from
-the picture entirely: WebP in the store is already what a browser wants, so
+**`webp_lossy` at q80 is the default** because a big map is almost entirely
+store, and this is where the order of magnitude lives. Re-measured on four real
+512 px leaf tiles from an existing map: png 201 KB a tile, `webp_lossless`
+135 KB (67%), `webp_lossy` q92 18.7 KB (9%), **q80 11.6 KB (6%)**, q60 9.4 KB
+(5%). Content decides the exact ratio — the table above is a different sample —
+but the shape is the same: lossless saves a third, lossy saves a factor of
+fifteen.
+
+**`webp_lossless` is the free one** if the store has to be exact — a third
+smaller for pixels that come back bit for bit, verified against the source array
+and against the derived pyramid. Either WebP setting removes the encode cache
+from the picture entirely: WebP in the store is already what a browser wants, so
 serving passes the stored bytes straight through.
+
+Changing this does not disturb an existing map — see the note on mixed formats
+below — so a map started under the old `png` default simply gains smaller tiles
+from the next save on.
 
 The lossy loss compounds **per pyramid level, not per save**. A parent is
 recomposed from its *children*, never from itself, so re-saving the same tile
 five times is bit-identical to saving it once (asserted in the tests) — but each
-level down encodes an already-encoded image, and that costs ~3.5 dB a level. If
-you want `webp_lossy` and depth, set `pyramid_to_zoom == z` while rendering and
-build the pyramid once at the end, from leaves that have only been encoded once.
+level down encodes an already-encoded image, and that costs ~3.5 dB a level.
+`webp_lossy` with depth is therefore fine here, which is the other half of why
+it is the default: the saver never recomposes, so the one build at the end
+always starts from leaves that have been encoded once.
 
 Formats may be mixed within one map: the decoder sniffs the signature, so
 changing `store_format` mid-run leaves the older tiles readable.
@@ -101,9 +124,29 @@ changing `store_format` mid-run leaves the older tiles readable.
 Recorded per tile: prompt, negative, seed, steps, cfg, sampler, scheduler,
 denoise, model files, latent size, timestamp, title and tags.
 
+#### `coords_mode: hilbert` vs `auto_grid`
+
+PMTiles stores its tiles in Hilbert tile-id order, so placing renders along
+the same curve makes a small id gap a small *byte* gap in the archive: a
+viewer panning across neighbours fetches ranges that are already next to
+each other. Shells are compact on screen but jump whenever they start a new
+ring. Measured over the first 8 placements of 2×2-tile renders at `z=6`
+(gap in tile ids between consecutively placed renders):
+
+| mode | gaps | max | mean |
+|---|---|---|---|
+| `auto_grid` | 4, 4, 6, **44**, 4, **22**, 16 | 44 | 14.3 |
+| `hilbert` | 4, 4, 6, 2, 4, 4, 6 | **6** | **4.3** |
+
+Every `hilbert` step is an adjacent block; `auto_grid` twice is not. Asserted
+in the tests rather than left as a claim.
+
 ### Hilbert Index → Tile X/Y (`HilbertXY`)
 
-Turns one integer into `x`/`y` along a Hilbert curve. Wire it into the saver's
+Turns one integer into `x`/`y` along a Hilbert curve — the explicit form of
+`coords_mode: hilbert`, for when the position has to come from something you
+control rather than from what the map happens to hold (a resumable sweep, a
+fixed slot per subject). Wire it into the saver's
 `x`/`y` with `coords_mode: manual` and drive `index` from a counter
 (`PrimitiveInt` with control **increment**): consecutive renders then land next to
 each other on the map *and* contiguously inside the archive, because PMTiles
@@ -146,28 +189,23 @@ almost nothing):
 | node preview in `temp/` | **2.8 MB** as `full`, **42 KB** as `thumbnail`, 0 as `off` | the render |
 
 So the GB-sized `.tiles.db` files next to your archives are *not* rewritten per
-tile; only the archive is. That makes `archive_every` the one knob that matters
-for disk wear.
+tile; only the archive is — and that is exactly why the saver no longer writes
+it at all. **There is nothing left to tune:** no pyramid, no archive, leaves
+straight into the store at ~40 KB a save whatever the map size.
 
-For a large run:
+A run therefore needs no settings:
 
-1. set the saver's **`pyramid_to_zoom` equal to `z`** (nothing is recomposed);
-2. set **`archive_every`** to a few hundred tiles — or turn `write_archive` off
-   entirely for manual-only. A map with tiles in the store but no `.pmtiles` yet
-   is still listed in the viewer, marked *not serialized yet*, with the build
-   button ready;
-3. when the run is done, press **⛰ build** in the viewer — or
+1. render. A map with tiles in the store but no `.pmtiles` yet is listed in the
+   viewer, marked *not serialized yet*, with the build button ready;
+2. when the run is done, press **⛰ build** in the viewer — or
    `POST /map/<name>/build`, or `tools/pmtiles_map.py --rebuild-pyramid <map>`
-   followed by `--rebuild`.
+   followed by `--rebuild`. One pass builds the pyramid *and* serializes the
+   archive.
 
-Measured over 20 saves of 16 leaves each: `archive_every` 0 → 20 rewrites
-(3.5 MB), 50 → 10 rewrites (1.8 MB), 200 → 2 rewrites (0.3 MB). The viewer shows
-how many tiles are waiting, and the build button lights up.
-
-**What batching costs you:** tiles are served *from the archive*, and the change
-feed only publishes what the archive already holds, so live updates lag by up to
-`archive_every` tiles. Nothing is lost — the store has every tile — but the map
-stops moving in real time.
+This was previously a three-knob dance (`pyramid_to_zoom == z`, `archive_every`
+a few hundred, `write_archive` off). All three are gone, along with
+`embed_tile_metadata` and `y_scheme`; what they were for is now the only
+behaviour. The saver went from 23 widgets to 16.
 
 The build runs in a worker thread with progress, so the viewer (and a running
 ComfyUI) stay responsive. While the pyramid is missing the saver marks the map
@@ -205,10 +243,16 @@ children is what stops it being a lottery: keeping one child whole would be
 cheaper (the bytes could be copied outright) but the same branch would win at
 every level, so three quarters of the map would never appear at any zoom.
 
-Both the mode and the floor are remembered on the map — but only when stated, so
-a plain rebuild never stamps one. The viewer's picker shows the map's own
-setting rather than its last value, and a later `--rebuild-pyramid` with no
-arguments reuses whatever the map was built with:
+**Both live on the build, not on the saver.** `pyramid_mode` and
+`pyramid_min_px` used to be widgets on `SavePMTilesMap`, which made them settings
+you had to get right *before* rendering, for a pyramid you would only look at
+afterwards. They are now arguments to the thing that builds it — the viewer's
+picker, the `/build` query, the CLI.
+
+Both are remembered on the map — but only when stated, so a plain rebuild never
+stamps one. The viewer's picker shows the map's own setting rather than its last
+value, and a later `--rebuild-pyramid` with no arguments reuses whatever the map
+was built with:
 
 ```bash
 python tools/pmtiles_map.py --rebuild-pyramid <map> --pyramid-mode scale
@@ -221,7 +265,7 @@ The same page serves both, picked automatically and switchable in the header:
 
 | source | reads | for |
 |---|---|---|
-| **store** (default when a `.tiles.db` exists) | SQLite, WebP straight from the encode cache | watching a run: a render is visible the moment it is saved, and the archive is never touched — which is what makes `archive_every` batching free of consequences |
+| **store** (default when a `.tiles.db` exists) | SQLite, WebP straight from the encode cache | watching a run: a render is visible the moment it is saved, and the archive is never touched — which is what lets the saver skip writing one entirely |
 | **archive** | the `.pmtiles` itself | checking the file that will be uploaded |
 
 Store reads are also the faster of the two: **0.35 ms vs 2.87 ms** per tile
@@ -430,10 +474,10 @@ per-tab actions for search, liked and marks.
 
 `meta.json` and `/map/list` also carry **`store_bounds`** / `store_min_zoom` /
 `store_max_zoom` / `store_tiles` whenever a store exists. The header's own
-bounds only move when the archive is re-serialized, so during a run they lag by
-up to `archive_every` tiles — and a viewer reading tiles from the *store* while
-bounding itself by the *archive* will not even request the newest renders.
-The viewer takes the union of the two.
+bounds only move when the archive is re-serialized, which — the saver never
+writing one — is not at all until you press build. A viewer reading
+tiles from the *store* while bounding itself by the *archive* will not even
+request the newest renders. The viewer takes the union of the two.
 
 `meta.json` also carries **`render_block`** (`"3x4"`): how many tiles one render
 occupies. Recorded by the saver and the importer, it is what lets a client work

@@ -90,7 +90,10 @@ def _store_tile(db_path, z, x, y):
         return None
     if not needs_encode:
         return data
-    quality = int(tilestore.read_map_meta(db_path, "webp_quality", 80) or 80)
+    # The store's own quality: encoding a PNG-backed tile at some other number
+    # would put an entry in the cache that the archive build then misses.
+    quality = int(tilestore.read_map_meta(db_path, "store_quality", 0)
+                  or archive.DEFAULT_QUALITY)
     blob = archive.encode_webp(tilestore.open_png(data), quality=quality, method=4)
     tilestore.write_webp_cache(db_path, z, x, y, blob, quality)
     return blob
@@ -101,8 +104,10 @@ def _require_map(maps_dir, name):
 
     Everything except /file works off the store when there is one -- tiles,
     metadata, search, the change feed, the render preview. Gating those on the
-    .pmtiles made a map with `write_archive` off answer 404 to its own live feed,
-    which is precisely the workflow the store-backed source exists for.
+    .pmtiles made a map whose archive had never been built answer 404 to its
+    own live feed, which is precisely the workflow the store-backed source
+    exists for -- and since the saver stopped writing archives, that is every
+    map until someone presses build.
     """
     if not _SAFE_NAME.match(name or "") or name.startswith("."):
         raise web.HTTPBadRequest(reason="bad map name")
@@ -332,7 +337,7 @@ def build_routes(maps_dir_fn):
         name = request.match_info["name"]
         maps = maps_dir_fn()
         # The *store* is what a build needs; requiring the archive here made a map
-        # that has never been serialized (write_archive off from the first save)
+        # that has never been serialized -- which is now every map until built --
         # impossible to build from the viewer.
         if not _SAFE_NAME.match(name or "") or name.startswith("."):
             raise web.HTTPBadRequest(reason="bad map name")
@@ -346,7 +351,9 @@ def build_routes(maps_dir_fn):
         want_archive = request.query.get("archive", "1") != "0"
         try:
             min_zoom = int(request.query.get("min_zoom", 0))
-            quality = int(request.query.get("quality", 80))
+            # Absent -> build_archive takes the store's own quality.
+            quality = request.query.get("quality")
+            quality = int(quality) if quality else None
         except ValueError:
             raise web.HTTPBadRequest(reason="min_zoom and quality must be integers")
         pyramid_mode = request.query.get("pyramid_mode") or None

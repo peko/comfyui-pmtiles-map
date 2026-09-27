@@ -55,7 +55,22 @@ def tensor_to_pil(image):
 
 
 class SavePMTilesMap:
-    """Write an image into a PMTiles archive at z/x/y and keep the pyramid current."""
+    """Write an image into the map's tile store at z/x/y. Leaves only.
+
+    The node does not build the pyramid and does not serialize the archive.
+    Both are O(whole map) and neither gets cheaper for being done per render:
+    recomposing ancestors costs one pass per level per image and rewrites the
+    shallow tiles once per image (65536 times for z=0 on a full z=8 map), and
+    the .pmtiles is re-serialized *whole* every time -- 135 MB per render on a
+    20k-tile map. Doing either N images at a time only changes how often the
+    waste happens.
+
+    So the saver writes leaves, marks the map `pyramid_stale`, and the client
+    builds both in one pass when asked: the viewer's build button, or
+    `tools/pmtiles_map.py --rebuild-pyramid`. Nothing is lost by waiting -- the
+    store is the source of truth and the viewer reads tiles from it, so a render
+    is on the map the moment it is saved, archive or no archive.
+    """
 
     def __init__(self):
         self.temp_dir = folder_paths.get_temp_directory()
@@ -63,6 +78,16 @@ class SavePMTilesMap:
             random.choice("abcdefghijklmnopqrstupvxyz") for _ in range(5)
         )
 
+    # `"advanced": True` hides an input until the node's Advanced toggle is on,
+    # and outlines it differently when shown -- a frontend feature, not ours:
+    # `isWidgetVisible()` is `!(collapsed || hidden || advanced && !showAdvanced)`,
+    # and `Comfy.Node.AlwaysShowAdvancedWidgets` forces them all open. Used by
+    # core (nodes_hooks, nodes_model_advanced, nodes_video_model) too.
+    #
+    # Basic is what changes per render: which map, where on it, what to call it,
+    # and what the node draws in the graph. Everything else describes the *map*
+    # -- set once when it is created and then left alone -- or is wired rather
+    # than typed (prompt_text/negative_text), so none of it belongs in the way.
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -70,48 +95,63 @@ class SavePMTilesMap:
                 "images": ("IMAGE", {"tooltip": "renders to place on the map"}),
                 "map_name": ("STRING", {"default": "results", "tooltip":
                              "output/maps/<name>.pmtiles (+ .tiles.db source of truth)"}),
-                "z": ("INT", {"default": 4, "min": 0, "max": MAX_ZOOM, "tooltip":
-                      "zoom level the render is placed on; coarser levels are derived"}),
+                # 10 gives a 1024x1024 tile extent. The old default of 4 is 16
+                # tiles a side: a 2x3-tile cell overflows it after five rows, and
+                # the failure is a ValueError mid-sweep rather than anything the
+                # graph could have warned about. Depth is free here -- empty
+                # levels cost nothing, and the pyramid is built once at the end.
+                "z": ("INT", {"default": 10, "min": 0, "max": MAX_ZOOM, "advanced": True,
+                      "tooltip":
+                      "zoom level the render is placed on; the map is 2^z tiles a "
+                      "side, so a block at x,y must satisfy x+nx <= 2^z. Coarser "
+                      "levels are derived later, by the viewer's build button"}),
                 "x": ("INT", {"default": 0, "min": 0, "max": (1 << MAX_ZOOM) - 1}),
                 "y": ("INT", {"default": 0, "min": 0, "max": (1 << MAX_ZOOM) - 1}),
                 "placement": (["slice", "single_tile"], {"default": "slice",
+                              "advanced": True,
                               "tooltip": "slice: cut the render into a tile grid at "
                                          "native pixels. single_tile: resize the whole "
                                          "render into one tile."}),
-                "coords_mode": (["manual", "auto_grid"], {"default": "manual",
-                                "tooltip": "auto_grid ignores x/y and takes the next "
-                                           "free block at zoom z"}),
-                "tile_size": (["256", "512"], {"default": "256"}),
-                "webp_quality": ("INT", {"default": 80, "min": 1, "max": 100,
-                                 "tooltip": "quality of the tiles written into the "
-                                            ".pmtiles archive"}),
+                "coords_mode": (["manual", "auto_grid", "hilbert"],
+                                {"default": "manual", "advanced": True,
+                                 "tooltip":
+                                 "manual: place at x/y. auto_grid: ignore x/y and "
+                                 "take the next free block, scanning in growing "
+                                 "squares. hilbert: the same, but walking the "
+                                 "Hilbert curve -- neighbours on the map are then "
+                                 "also neighbours inside the .pmtiles, which is the "
+                                 "order the format itself stores tiles in. Both "
+                                 "automatic modes keep no counter; they look at "
+                                 "what the map already holds."}),
+                "tile_size": (["256", "512"], {"default": "256", "advanced": True}),
                 "store_format": (list(tilestore.STORE_FORMATS), {"default":
-                                 tilestore.PNG, "tooltip":
+                                 tilestore.WEBP_LOSSY, "advanced": True,
+                                 "tooltip":
                                  "how tiles are kept in the .tiles.db behind the "
                                  "archive. Measured on 512 px render tiles: png "
                                  "341 KB (17 ms), webp_lossless 238 KB (84 ms) and "
-                                 "BIT-IDENTICAL, webp_lossy 34 KB at q80. Lossy "
-                                 "costs ~3.5 dB PSNR per pyramid level, because a "
-                                 "parent is recomposed from its children and so "
-                                 "encodes an already-encoded image; re-saving the "
-                                 "same tile does NOT add loss. webp_lossless is the "
-                                 "free win -- a third smaller for the same pixels."}),
-                "store_quality": ("INT", {"default": 92, "min": 1, "max": 100,
+                                 "BIT-IDENTICAL, webp_lossy 34 KB at q80 -- a tenth "
+                                 "of png, which is why it is the default: a big map "
+                                 "is mostly store. Lossy costs ~3.5 dB PSNR per "
+                                 "pyramid level, because a parent is recomposed from "
+                                 "its children and so encodes an already-encoded "
+                                 "image; re-saving the same tile does NOT add loss. "
+                                 "webp_lossless when the store has to be exact."}),
+                "store_quality": ("INT", {"default": 80, "min": 1, "max": 100,
+                                  "advanced": True,
                                   "tooltip": "quality for store_format=webp_lossy "
-                                             "only; ignored otherwise. This is the "
-                                             "source of truth, so keep it well above "
-                                             "the archive's webp_quality."}),
-                "pyramid_to_zoom": ("INT", {"default": 0, "min": 0, "max": MAX_ZOOM,
-                                    "tooltip": "build derived levels down to this zoom"}),
-                "y_scheme": (["xyz", "tms"], {"default": "xyz", "tooltip":
-                             "interpretation of the y input; tiles are always stored XYZ"}),
-                "write_archive": ("BOOLEAN", {"default": True, "tooltip":
-                                  "re-serialize the .pmtiles file after this save"}),
-                "embed_tile_metadata": ("BOOLEAN", {"default": True}),
-                "store_full_prompt": ("BOOLEAN", {"default": False, "tooltip":
+                                             "only; ignored otherwise. Serving reads "
+                                             "these bytes straight through, so this "
+                                             "is the quality you actually look at -- "
+                                             "and the archive build re-encodes at the "
+                                             "same number, so it is the map's one "
+                                             "quality setting rather than the first "
+                                             "of two."}),
+                "store_full_prompt": ("BOOLEAN", {"default": False, "advanced": True,
+                                      "tooltip":
                                       "keep the whole graph per tile in the SQLite store"}),
                 "title": ("STRING", {"default": ""}),
-                "tags": ("STRING", {"default": ""}),
+                "tags": ("STRING", {"default": "", "advanced": True}),
             },
             # Optional, not required: appending a *required* input would break
             # every already-saved API prompt ("Required input is missing"), and
@@ -131,41 +171,8 @@ class SavePMTilesMap:
             # minimum size. Both are meant to be *wired* from whatever builds the
             # string, and a wired widget draws no editor at all.
             "optional": {
-                "pyramid_mode": (list(tilestore.PYRAMID_MODES),
-                                 {"default": tilestore.PYRAMID_SCALE,
-                                  "tooltip": "how a zoom level is built from the one "
-                                             "below. `scale` averages all four "
-                                             "children into one tile -- the classic "
-                                             "pyramid. `sample` does that only while "
-                                             "the content stays above pyramid_min_px, "
-                                             "then keeps ONE child whole instead: "
-                                             "four unreadable renders average to "
-                                             "noise, so past that point a quarter as "
-                                             "many legible ones per level is the "
-                                             "better trade."}),
-                "pyramid_min_px": ("INT", {"default": tilestore.MIN_CONTENT_PX,
-                                   "min": 1, "max": 1024,
-                                   "tooltip": "the floor for `sample`: one leaf "
-                                              "tile's content occupies "
-                                              "tile_size >> (leaf_zoom - z) pixels at "
-                                              "level z, and averaging stops once that "
-                                              "would go under this."}),
-                "archive_every": ("INT", {"default": 0, "min": 0, "max": 100000,
-                                  "tooltip": "batch the archive rewrite: serialize "
-                                             "only once at least this many tiles are "
-                                             "waiting. 0 = every save (fine for a "
-                                             "small map). The .pmtiles is rewritten "
-                                             "whole every time -- 135 MB per render on "
-                                             "a 20k-tile map -- while the store costs "
-                                             "~40 KB, so this is the knob that saves "
-                                             "the disk."}),
-                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
-                            "tooltip": "the image the node shows in the graph is a "
-                                       "file in ComfyUI/temp. `full` writes the whole "
-                                       "render (~2.8 MB each, measured); `thumbnail` "
-                                       "writes a 384 px WebP (~42 KB); `off` writes "
-                                       "nothing -- the map itself is the preview."}),
                 "prompt_text": ("STRING", {"default": "", "multiline": False,
+                                "advanced": True,
                                 "tooltip": "the prompt to record, when the graph "
                                            "builds it at runtime (FormattedString, "
                                            "wildcards, a list selector) and it "
@@ -173,7 +180,16 @@ class SavePMTilesMap:
                                            "Wire the same string that feeds "
                                            "CLIPTextEncode.text here."}),
                 "negative_text": ("STRING", {"default": "", "multiline": False,
+                                  "advanced": True,
                                   "tooltip": "same, for the negative prompt"}),
+                # Last on purpose: it is the one widget that changes nothing
+                # about the map, only what this node draws in the graph.
+                "preview": (["thumbnail", "full", "off"], {"default": "thumbnail",
+                            "tooltip": "the image the node shows in the graph is a "
+                                       "file in ComfyUI/temp. `full` writes the whole "
+                                       "render (~2.8 MB each, measured); `thumbnail` "
+                                       "writes a 384 px WebP (~42 KB); `off` writes "
+                                       "nothing -- the map itself is the preview."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -183,18 +199,23 @@ class SavePMTilesMap:
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image/pmtiles"
-    DESCRIPTION = ("Saves renders as WebP tiles in a PMTiles v3 archive at the given "
-                   "z/x/y, rebuilding the coarser pyramid levels down to z=0.")
+    DESCRIPTION = ("Saves renders as tiles in the map's store at the given z/x/y. "
+                   "Leaves only: the coarser pyramid levels and the .pmtiles "
+                   "archive are built in one pass afterwards, from the viewer's "
+                   "build button or tools/pmtiles_map.py.")
 
     def save(self, images, map_name, z, x, y, placement, coords_mode, tile_size,
-             webp_quality, store_format, store_quality, pyramid_to_zoom, y_scheme,
-             write_archive, embed_tile_metadata, store_full_prompt, title, tags,
-             archive_every=0, preview="thumbnail", prompt_text="", negative_text="",
-             pyramid_mode=None, pyramid_min_px=None,
-             prompt=None, extra_pnginfo=None):
+             store_format, store_quality, store_full_prompt,
+             title, tags, preview="thumbnail", prompt_text="", negative_text="",
+             prompt=None, extra_pnginfo=None, **_retired):
+        # **_retired swallows pyramid_to_zoom / pyramid_mode / pyramid_min_px /
+        # archive_every / y_scheme / write_archive / embed_tile_metadata /
+        # webp_quality.
+        # ComfyUI only passes declared inputs, so this is for anything calling
+        # save() directly -- a graph that still carries the old widgets is not
+        # this function's problem.
         name = safe_map_name(map_name)
         ts = int(tile_size)
-        pyramid_to_zoom = min(int(pyramid_to_zoom), int(z))
         os.makedirs(maps_dir(), exist_ok=True)
 
         lines = []
@@ -218,17 +239,22 @@ class SavePMTilesMap:
                 pil = tensor_to_pil(image)
                 tiles, nx, ny, how = self._cut(pil, ts, placement)
 
-                if coords_mode == "auto_grid" or index > 0:
+                if coords_mode != "manual" or index > 0:
                     # index > 0: manual coordinates describe one spot, so the rest
-                    # of a batch would overwrite each other. Advance instead.
-                    x0, y0 = store.next_free_block(z, nx, ny)
+                    # of a batch would overwrite each other. Advance instead --
+                    # along whichever traversal the mode asked for, and along the
+                    # shells when the mode had no opinion because it is `manual`.
+                    place = (store.next_free_hilbert_block
+                             if coords_mode == "hilbert" else store.next_free_block)
+                    x0, y0 = place(z, nx, ny)
                     if coords_mode == "manual" and index > 0:
                         lines.append(f"image {index}: manual x/y already used by "
                                      f"image 0, auto-placed at {x0},{y0}")
                 else:
+                    # XYZ: y counts from the top, and a multi-tile block is
+                    # addressed by its top-left corner. TMS (y from the bottom)
+                    # used to be selectable here and was never once selected.
                     x0, y0 = int(x), int(y)
-                    if y_scheme == "tms":
-                        y0 = (1 << z) - 1 - y0 - (ny - 1)
 
                 if x0 + nx > (1 << z) or y0 + ny > (1 << z) or min(x0, y0) < 0:
                     raise ValueError(
@@ -254,59 +280,30 @@ class SavePMTilesMap:
                 lines.append(f"image {index}: {how} -> {nx}x{ny} tile(s) at "
                              f"z={z} x={x0} y={y0}")
 
-            derived = store.recompose_ancestors(
-                placed, min_zoom=pyramid_to_zoom,
-                mode=pyramid_mode, min_px=pyramid_min_px)
-            if pyramid_to_zoom >= z:
-                # Nothing was recomposed: the coarse levels are missing, and the
-                # viewer should offer to build them rather than pretend the map is
-                # complete. Doing it per save costs `depth` recompositions per
-                # render and rewrites the shallow tiles once per render -- 65536
-                # times for z=0 on a full z=8 map.
-                store.set_map_meta("pyramid_stale", "1")
-                lines.append("pyramid: skipped (build it from the viewer or "
-                             "tools/pmtiles_map.py --rebuild-pyramid)")
-            else:
-                lines.append(f"pyramid: {len(derived)} derived tile(s) down to "
-                             f"z={pyramid_to_zoom}")
-            # So a tile the viewer encodes on demand matches what the archive
-            # build wants, instead of the two overwriting each other's cache.
-            store.set_map_meta("webp_quality", int(webp_quality))
+            # Leaves only. The coarse levels are missing, so say so: the viewer
+            # reads this flag to light its build button, and a map that claimed
+            # to be complete would just show holes when zoomed out.
+            store.set_map_meta("pyramid_stale", "1")
+            lines.append("pyramid: not built (viewer's build button, or "
+                         "tools/pmtiles_map.py --rebuild-pyramid)")
+            # No separate archive quality is recorded: TileStore already stamps
+            # `store_quality`, and the archive build and the on-demand encode
+            # both read that one number, so they fill the same cache.
             # The shape of one render, in tiles. The viewer needs it to know
             # which tiles form one image; deriving that per tile from `grid`
             # costs a request per render hovered -- unaffordable against a busy
             # server, and unnecessary, since the shape is a property of the map
             # rather than of the tile.
             store.set_map_meta("render_block", f"{nx}x{ny}")
-            pending = store.bump_pending(len(placed) + len(derived))
+            pending = store.bump_pending(len(placed))
             store.db.commit()
             stats = store.stats()
 
-            # The store costs ~40 KB of writes per save regardless of map size
-            # (SQLite writes changed pages), but the archive is rewritten *whole*
-            # -- 135 MB per render on a 20k-tile map. So batch that one.
-            threshold = max(0, int(archive_every))
-            due = threshold == 0 or pending >= threshold
-            if write_archive and not due:
-                lines.append(f"archive: deferred, {pending} tile(s) pending "
-                             f"(archive_every={threshold})")
-            if write_archive and due:
-                info = archive.build_archive(
-                    store, archive_path(name),
-                    webp_quality=webp_quality,
-                    embed_tile_metadata=embed_tile_metadata,
-                    name=name,
-                )
-                lines.append(
-                    "archive: {tiles} tiles ({unique} unique), {mb:.2f} MB, "
-                    "z{minz}-{maxz}, {secs:.2f}s".format(
-                        tiles=info["tiles"], unique=info["unique_tiles"],
-                        mb=info["file_bytes"] / 1e6, minz=info["min_zoom"],
-                        maxz=info["max_zoom"], secs=info["seconds"])
-                )
-            elif not write_archive:
-                lines.append(f"archive: off, {pending} tile(s) pending of "
-                             f"{stats['tiles']} in the store — build from the viewer")
+            # The archive is the client's job. It is re-serialized whole every
+            # time (135 MB per render on a 20k-tile map) for a file nothing on
+            # the map reads -- the viewer serves tiles from the store.
+            lines.append(f"archive: {pending} tile(s) pending of "
+                         f"{stats['tiles']} in the store — build from the viewer")
 
         text = "\n".join(lines)
         print(f"[pmtiles-map] {name}\n  " + "\n  ".join(lines))

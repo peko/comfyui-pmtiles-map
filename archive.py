@@ -93,18 +93,47 @@ def xmp_packet(meta):
     ).encode("utf-8")
 
 
+#: What a map is encoded at when nothing says otherwise. Matches TileStore's
+#: own fallback, so a store written before `store_quality` was recorded reads
+#: the same number here as it does there.
+DEFAULT_QUALITY = 92
+
+
+def store_side_quality(store):
+    """The quality the store's tiles were written at.
+
+    One number per map, not two. `webp_quality` used to be a separate saver
+    input and was the redundant one: the node recorded it, the serving path
+    honoured it, and the build ignored it in favour of a hardcoded 80 -- so
+    setting it to anything else quietly produced an archive that disagreed with
+    the map's own metadata and missed every cache entry.
+    """
+    q = getattr(store, "store_quality", None)
+    return int(q) if q else DEFAULT_QUALITY
+
+
 # ------------------------------------------------------------------ archive out
 
-def build_archive(store, out_path, webp_quality=80, embed_tile_metadata=True,
+def build_archive(store, out_path, webp_quality=None, embed_tile_metadata=True,
                   name=None, description="", attribution="",
                   metadata_budget=8 * 1024 * 1024, log=print, progress=None):
     """Write every tile in `store` to `out_path` as WebP.  Atomic replace.
+
+    `webp_quality=None` means **the store's own quality** -- the number the
+    tiles in the .tiles.db were written at. There is no sense in a second,
+    independent quality for the archive: the archive is a re-encode of the
+    store, so asking for more than the store holds invents detail that is not
+    there, and asking for less throws some away twice. A caller that really
+    wants a different number (the CLI's --quality / --webp-quality, for a
+    deliberately smaller upload) still passes one.
 
     `embed_tile_metadata` controls the archive's single metadata blob only; a
     leaf tile always carries its own record as an XMP packet, which costs a few
     hundred bytes and is what makes an extracted tile self-describing.
     """
     t0 = time.perf_counter()
+    if webp_quality is None:
+        webp_quality = store_side_quality(store)
     coords = store.all_coords()
     if not coords:
         raise ValueError("store holds no tiles; nothing to serialize")
@@ -297,7 +326,7 @@ def archive_info(path):
         # strength of the archive alone.
         "has_store": os.path.isfile(f"{os.path.splitext(path)[0]}.tiles.db"),
         # Tiles in the store that this archive does not contain yet, because the
-        # saver is batching archive writes (see archive_every).
+        # saver never writes the archive -- that is the client's job.
         "pending_tiles": int(tilestore.read_map_meta(
             f"{os.path.splitext(path)[0]}.tiles.db", "pending_tiles", "0") or 0),
         # The flag is set by a saver that skipped the pyramid, but maps written
@@ -323,8 +352,8 @@ def archive_info(path):
         # The store's own extent, which is the live one.
         #
         # A viewer reading tiles from the store must bound itself by the store,
-        # not by this header: with archive_every batching (or write_archive off)
-        # the archive lags by up to that many tiles, and Leaflet refuses to even
+        # not by this header: the archive lags by every tile saved since the
+        # last build, and Leaflet refuses to even
         # request a tile outside options.bounds -- so the newest row of renders
         # is served, present, and never asked for. Stale bounds are indisting-
         # uishable from missing tiles.
@@ -400,7 +429,7 @@ def _store_extent(db_path):
 def store_info(db_path):
     """Describe a store that has no archive yet, in the same shape as archive_info.
 
-    A run with `write_archive` off (or a threshold not yet reached) has tiles in
+    A run has tiles in
     the store and no .pmtiles at all. Leaving those maps out of the listing made
     them invisible in the viewer -- and the build button with them, so the only
     way out was the CLI.

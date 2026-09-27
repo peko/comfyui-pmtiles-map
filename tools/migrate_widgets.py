@@ -32,8 +32,15 @@ import shutil
 import sys
 import urllib.request
 
-# Widget order as saved by earlier versions of SavePMTilesMap. The node only
-# ever *grew*, so a file's length says which of these it was written against.
+# Widget order as saved by earlier versions of SavePMTilesMap. Only *old*
+# layouts live here; the current one is read from a running ComfyUI. Lengths
+# happen to be unique so far, which is the fallback when a file carries no
+# `inputs` widget names -- but do not lean on that: the node has now shrunk as
+# well as grown (2026-09-27 dropped pyramid_to_zoom, pyramid_mode,
+# pyramid_min_px, archive_every, write_archive, embed_tile_metadata, y_scheme
+# and webp_quality -- 23 widgets -> 15, and preview moved to the end), so two
+# different layouts sharing a length is a matter of time. Prefer the names in
+# the file.
 # (`images` is a socket, not a widget, and never appears here.)
 HISTORY = {
     "SavePMTilesMap": [

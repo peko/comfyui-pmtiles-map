@@ -30,6 +30,22 @@ def d2xy(order, index):
     return x, y
 
 
+def block_grid_order(order, nx, ny):
+    """Largest square block grid that fits nx x ny blocks inside 2^order tiles.
+
+    The grid is square because the Hilbert curve is, and the tighter axis
+    decides -- 2x3 blocks on a z=8 level fit 128 across but only 85 down, so
+    64x64 blocks it is, spanning 128x192 tiles.
+
+    Lives here rather than in imgimport because the saver's placement needs it
+    too, and tilestore should not have to import the image importer to place a
+    tile. `imgimport.block_grid_order` is an alias.
+    """
+    side = 1 << int(order)
+    fit = min(side // max(1, int(nx)), side // max(1, int(ny)))
+    return max(0, max(1, fit).bit_length() - 1)
+
+
 def xy2d(order, x, y):
     """(x, y) -> index along the curve.  The inverse of d2xy."""
     side = 1 << order

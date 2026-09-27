@@ -660,8 +660,8 @@ def main():
           [m["name"] for m in archive.list_archives(args.out)].count("storeonly") == 1)
 
     print("16. deferred pyramid")
-    # Rendering with pyramid_to_zoom == z writes leaves only; one later pass must
-    # produce exactly the same pyramid, for far less work.
+    # The saver writes leaves only; one later pass must produce exactly the same
+    # pyramid as recomposing per render would have, for far less work.
     each_db = os.path.join(args.out, "pyr_each.tiles.db")
     defer_db = os.path.join(args.out, "pyr_defer.tiles.db")
     for db in (each_db, defer_db):
@@ -1302,7 +1302,72 @@ def main():
           str(sorted(set(steps))))
 
     # ------------------------------------------------------------------ 24
-    print("24. the pack loads the way ComfyUI loads it")
+    print("24. coords_mode hilbert places along the curve, not in shells")
+
+    # Both automatic modes keep no counter -- they look at what the map holds --
+    # so placing N renders is just calling the placer N times against a store
+    # that grows underneath it.
+    from pmtiles.tile import zxy_to_tileid as _tileid
+    Z, NX, NY = 6, 2, 2
+
+    def place_n(db_name, picker, n):
+        path = os.path.join(args.out, db_name)
+        if os.path.exists(path):
+            os.remove(path)
+        out = []
+        with tilestore.TileStore(path, 256) as st:
+            for _ in range(n):
+                bx, by = picker(st)(Z, NX, NY)
+                for dx in range(NX):
+                    for dy in range(NY):
+                        st.put_tile(Z, bx + dx, by + dy,
+                                    Image.new("RGB", (256, 256), (9, 9, 9)),
+                                    kind=tilestore.LEAF)
+                out.append((bx, by))
+            st.db.commit()
+        return out
+
+    shells = place_n("place_shell.tiles.db", lambda s: s.next_free_block, 8)
+    curve = place_n("place_curve.tiles.db", lambda s: s.next_free_hilbert_block, 8)
+
+    check("both modes place 8 distinct blocks",
+          len(set(shells)) == 8 and len(set(curve)) == 8,
+          f"{len(set(shells))} / {len(set(curve))}")
+    check("nothing overlaps or leaves the level",
+          all(0 <= x and x + NX <= (1 << Z) and 0 <= y and y + NY <= (1 << Z)
+              for x, y in shells + curve))
+
+    def gaps(points):
+        ids = [_tileid(Z, x, y) for x, y in points]
+        return [abs(b - a) for a, b in zip(ids, ids[1:])]
+
+    # The point of the mode: PMTiles stores tiles in Hilbert tile-id order, so a
+    # small id gap is a small *byte* gap in the archive. Shells jump whenever
+    # they start a new ring.
+    gs, gc = gaps(shells), gaps(curve)
+    check("the curve keeps consecutive renders close in archive order",
+          max(gc) < max(gs), f"curve max {max(gc)} vs shells max {max(gs)}")
+    check("and closer on average too",
+          sum(gc) / len(gc) < sum(gs) / len(gs),
+          f"{sum(gc) / len(gc):.1f} vs {sum(gs) / len(gs):.1f}")
+    check("every curve step is an adjacent block",
+          {max(abs(a[0] - b[0]) // NX, abs(a[1] - b[1]) // NY)
+           for a, b in zip(curve, curve[1:])} == {1},
+          str(sorted({max(abs(a[0] - b[0]) // NX, abs(a[1] - b[1]) // NY)
+                      for a, b in zip(curve, curve[1:])})))
+    try:
+        with tilestore.TileStore(os.path.join(args.out, "place_curve.tiles.db"),
+                                 256) as st:
+            st.next_free_hilbert_block(1, 8, 8)      # 8x8 block on a 2x2 level
+        check("a block that cannot fit is refused rather than placed outside",
+              False, "no error raised")
+    except ValueError:
+        check("a block that cannot fit is refused rather than placed outside", True)
+    check("imgimport still exports block_grid_order after the move",
+          imgimport.block_grid_order is hilbert.block_grid_order)
+
+    # ------------------------------------------------------------------ 25
+    print("25. the pack loads the way ComfyUI loads it")
 
     # Every other check here imports the modules FLAT, with the pack directory on
     # sys.path -- which is how tools/ use them and is exactly the mode in which a

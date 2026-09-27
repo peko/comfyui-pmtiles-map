@@ -162,7 +162,7 @@ function tileAt(latlng, zoom) {
  *
  * `store` is the live source: tiles come straight out of SQLite, so a render is
  * visible the moment it is saved and the archive is never touched -- which is
- * what lets archive_every batch the .pmtiles writes without freezing the map.
+ * what lets the saver skip writing the .pmtiles at all without freezing the map.
  * `archive` reads the .pmtiles itself, i.e. exactly what would be uploaded.
  */
 function sourceFor(info) {
@@ -175,9 +175,9 @@ function sourceFor(info) {
 /** How far the map reaches: the archive's extent UNIONED with the store's.
  *
  * The two disagree during a run. Tiles are served from the store, but the
- * archive's header only moves when the archive is re-serialized -- with
- * `archive_every` batching, or `write_archive` off, it lags by up to that many
- * tiles. Bounding the layer by the stale one makes Leaflet refuse to *request*
+ * archive's header only moves when the archive is re-serialized -- which, with
+ * the saver never writing one, is not until build is pressed.
+ * Bounding the layer by the stale one makes Leaflet refuse to *request*
  * the newest renders (`GridLayer._isValidTile`), so they are saved, served on
  * demand, announced by the change feed, and never fetched: the last row of the
  * map is simply missing, which reads as a clipped image rather than as stale
@@ -1279,8 +1279,8 @@ el('reload-tiles').addEventListener('click', reloadTiles);
 /* ------------------------------------------------------------ build on demand */
 /* Recomposing the pyramid on every save costs one recomposition per level per
  * render, and rewrites the shallow tiles once per render — 65536 times for z=0
- * on a full z=8 map. Set the saver's pyramid_to_zoom to its z while rendering,
- * then build the levels here, once, in a single bottom-up pass. */
+ * on a full z=8 map. So the saver does not: it writes leaves and marks the map
+ * stale, and the levels are built here, once, in a single bottom-up pass. */
 
 async function buildMap() {
   if (!state.name || state.building) return;
