@@ -1,5 +1,30 @@
 # comfyui-pmtiles-map
 
+> Buddy! I know everything! You just bought yet another terabyte SSD because
+> there's nowhere left to put everything you've generated with those glorious
+> models! You're sitting on gigabytes of neural slop you don't even have the
+> strength to look through, let alone sort! Admit it! You don't have the
+> willpower to delete any of it! They're all so beautiful! Oh yesss... But
+> I've got something cool for you: you will finally SEE all those terabytes
+> you've been generating at night!
+
+- **One node** — every render lands in one giant giga-panorama.
+- **A map client** — everything on your disk from a bird's eye view: pan,
+  zoom, dive from thumbnails to full resolution like it's Google Maps.
+- **One file, full story** — all renders in a single database, prompt, seed
+  and settings behind any tile one click away.
+- **Live mode** — renders appear on the map as they finish; watch the
+  panorama grow while ComfyUI works.
+- **Search & hearts** — find renders by prompt text, mark the keepers.
+- **Zero-backend publishing** — export to PMTiles and drop it on any static
+  hosting; no server required.
+- **Giant XY sheets** — scripts for sheets over any axes you can dream up:
+  checkpoints, LoRAs, prompts, samplers…
+- **Hoard packing** — scripts that fold your existing image piles into
+  panoramas, no ComfyUI needed.
+
+![Demo](docs/demo.webp)
+
 Save ComfyUI renders into a **PMTiles v3** archive as map tiles, and browse the
 whole session as a zoomable map — with search, saved points of interest, live
 updates as renders land, and full-resolution previews.
@@ -288,7 +313,14 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 * **Live updates**: the saver records which tiles it wrote; the viewer subscribes
   to that feed and refreshes *only those tiles*, flashing each one. No layer
   reload, no polling storm.
-* **Search** (left pane, `/`): title, tags and prompt, one result per render.
+* **follow new** (top bar, off by default): pans to each render as it lands, so a
+  long run can be watched without touching the mouse. Only events at the deepest
+  level are followed — a pyramid build writes derived tiles through the same log
+  and would otherwise drag the view across the shallow levels — and a burst is
+  debounced to one pan, since a sliced render arrives one tile at a time. The
+  whole render block is framed, not the corner tile the last event named, and a
+  render already fully on screen is outlined without moving the map.
+* **Search** (`/`): title, tags and prompt, one result per render.
   Clicking frames the whole render.
 * **Liked list**: saved points of interest in `localStorage`, drag to reorder,
   double-click to rename, copy/paste the list as JSON to move it between
@@ -452,13 +484,13 @@ an epsilon or `floor`/`ceil` silently takes an extra row.
 | `1`–`9` | switch archive (view kept) |
 | `/` | focus search |
 | `s` | save the selected tile to the liked list |
-| `b` | show/hide the left pane |
+| `b` | show/hide the side panel |
 | `r` | refetch every visible tile |
 | `x`, `d` | mark / per-tile debug overlay |
 | `?` | the help tab — every gesture and key, in the app |
 | `Esc` | clear the selection, or close the preview |
 
-The **?** tab in the left pane documents all of the above where you need it,
+The **?** tab in the side panel documents all of the above where you need it,
 rather than here: what each top-bar control does, the map gestures, and the
 per-tab actions for search, liked and marks.
 

@@ -403,8 +403,8 @@ const PRETTY = [
 ];
 
 function describe(coord, meta) {
-  el('side-empty').hidden = true;
-  el('side-body').hidden = false;
+  el('info-empty').hidden = true;
+  el('info-body').hidden = false;
   el('tile-coord').textContent = `${coord.z}/${coord.x}/${coord.y}`;
   el('tile-thumb').src =
     `/map/${encodeURIComponent(state.name)}/tiles/${coord.z}/${coord.x}/${coord.y}.webp?v=${state.mtime}`;
@@ -469,6 +469,12 @@ async function describeUnder(latlng) {
   const hit = await resolveUnder(latlng);
   if (!hit) return;
   state.selection = hit.coord;
+  // Clicking the map is the gesture that asks "what is this?", so it opens the
+  // tab that answers -- the panel is shared now, and describing into a hidden
+  // pane would read as a dead click. Only this path switches: following a
+  // search result or a liked row is navigation, and yanking the tab out from
+  // under a list you are working through would lose your place.
+  setTab('info');
   describe(hit.coord, hit.meta);
 }
 
@@ -512,6 +518,7 @@ map.on('dblclick', async (ev) => {
   const hit = await resolveUnder(ev.latlng);
   if (!hit) return;
   state.selection = hit.coord;
+  setTab('info');                  // the pane behind the lightbox, once it closes
   describe(hit.coord, hit.meta);
   openPreview(hit.coord, hit.meta);
 });
@@ -573,11 +580,12 @@ function setTab(name, remember = true) {
   }
 }
 
-function setLeft(visible) {
-  state.ui.left = visible;
+function setPanel(visible) {
+  state.ui.panel = visible;
   storeUi();
-  el('left').classList.toggle('hidden', !visible);
-  el('left-toggle').textContent = visible ? '☰' : '▶';
+  el('panel').classList.toggle('hidden', !visible);
+  // The panel is on the right, so the arrow that brings it back points at it.
+  el('panel-toggle').textContent = visible ? '☰' : '◀';
   // Leaflet caches the container size; without this the tiles stay laid out for
   // the old width and the map goes grey down one side.
   map.invalidateSize({ animate: false });
@@ -590,10 +598,11 @@ el('source-picker').addEventListener('change', (ev) => {
   refreshMaps({ initial: true });
 });
 
+registerTab('info');
 registerTab('search');
 registerTab('saved');
 registerTab('help');
-el('left-toggle').addEventListener('click', () => setLeft(el('left').classList.contains('hidden')));
+el('panel-toggle').addEventListener('click', () => setPanel(el('panel').classList.contains('hidden')));
 
 /* ------------------------------------------------------- navigate to a tile */
 
@@ -1072,6 +1081,72 @@ function consumeDirty() {
 
 map.on('moveend zoomend', consumeDirty);
 
+/* ------------------------------------------------------- follow new renders */
+/* With `follow new` on, the map chases the feed: the view pans to each render as
+ * it lands, so a long run can be watched without touching the mouse.
+ *
+ * Only the deepest level counts. A pyramid build writes its derived tiles
+ * through the same event log, and following those would drag the view across the
+ * shallow levels while nothing new is being rendered.
+ *
+ * A sliced render arrives one tile at a time -- sixteen events for a 4x4 block --
+ * so the pan is debounced and only the last coordinate of a burst is used.
+ * Panning to each tile in turn is a shudder, not a follow.
+ */
+const FOLLOW_SETTLE = 300;
+
+function followChanges(changes) {
+  if (!el('follow-toggle').checked || !state.meta) return;
+  const leaf = state.meta.max_zoom;
+  let target = null;
+  // The archive is part of the target: a switch during the settle window would
+  // otherwise pan the new map to the old one's coordinate.
+  for (const [z, x, y] of changes) if (z >= leaf) target = { z, x, y, map: state.name };
+  if (!target) return;
+  state.followTarget = target;
+  clearTimeout(state.followTimer);
+  state.followTimer = setTimeout(followPan, FOLLOW_SETTLE);
+}
+
+async function followPan() {
+  const target = state.followTarget;
+  state.followTarget = null;
+  if (!target || !el('follow-toggle').checked || !state.meta) return;
+  if (target.map !== state.name) return;
+  // The tile's own metadata says where it sits inside its render, so the whole
+  // render is framed rather than the corner tile the last event happened to name.
+  const meta = await fetchTileMeta(target);
+  // The fetch is a round trip; the archive (or the toggle) may have changed
+  // under it.
+  if (target.map !== state.name || !el('follow-toggle').checked) return;
+  const grid = (meta && Array.isArray(meta.grid) && meta.grid.length === 4)
+    ? meta.grid : [0, 0, 1, 1];
+  const block = {
+    z: target.z,
+    x: target.x - grid[0],
+    y: target.y - grid[1],
+    nx: grid[2] || 1,
+    ny: grid[3] || 1,
+  };
+  const bounds = blockBounds(block);
+  // Already fully visible: outline it, but do not move. Following should carry
+  // the view to work you cannot see, not twitch the map every time a tile lands
+  // in the middle of it.
+  if (!map.getBounds().contains(bounds)) {
+    map.panTo(bounds.getCenter(), { animate: true, duration: 0.4 });
+  }
+  highlight(block, { hold: 1200 });
+}
+
+el('follow-toggle').addEventListener('change', (ev) => {
+  state.ui.follow = ev.target.checked;
+  storeUi();
+  if (!ev.target.checked) {
+    clearTimeout(state.followTimer);
+    state.followTarget = null;
+  }
+});
+
 function applyChanges(payload) {
   if (!payload) return;
   if (typeof payload.seq === 'number') state.seq = payload.seq;
@@ -1083,6 +1158,7 @@ function applyChanges(payload) {
   }
   if (payload.changes && payload.changes.length) {
     refreshTiles(payload.changes, state.seq);
+    followChanges(payload.changes);
     if (state.selection) {
       const hit = payload.changes.some(([z, x, y]) => z === state.selection.z
         && x === state.selection.x && y === state.selection.y);
@@ -1244,12 +1320,12 @@ window.addEventListener('keydown', (ev) => {
   const tag = (ev.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
   if (ev.key === 's') { ev.preventDefault(); saveSelected(); setTab('saved'); return; }
-  if (ev.key === 'b') { ev.preventDefault(); setLeft(el('left').classList.contains('hidden')); return; }
+  if (ev.key === 'b') { ev.preventDefault(); setPanel(el('panel').classList.contains('hidden')); return; }
   if (ev.key === 'r') { ev.preventDefault(); reloadTiles(); return; }
-  if (ev.key === '?') { ev.preventDefault(); setLeft(true); setTab('help'); return; }
+  if (ev.key === '?') { ev.preventDefault(); setPanel(true); setTab('help'); return; }
   if (ev.key === '/') {
     ev.preventDefault();
-    setLeft(true);                   // focusing a hidden input does nothing useful
+    setPanel(true);                   // focusing a hidden input does nothing useful
     setTab('search');
     el('search-input').focus();
     el('search-input').select();
@@ -1367,7 +1443,12 @@ try {
   state.ui = {};
 }
 el('source-picker').value = state.ui.source || 'auto';
-setLeft(state.ui.left !== false);
+// Off unless it was deliberately turned on: a map that pans by itself when you
+// did not ask for it reads as a bug.
+el('follow-toggle').checked = state.ui.follow === true;
+// `left` is what this preference was called while the panel was on the left;
+// honouring it keeps a panel someone hid from reappearing after the move.
+setPanel((state.ui.panel !== undefined ? state.ui.panel : state.ui.left) !== false);
 setTab(TABS.includes(state.ui.tab) ? state.ui.tab : 'search', false);
 state.saved = loadSaved();
 renderSaved();

@@ -9,7 +9,6 @@
 </head>
 <body>
 <header>
-  <button id="left-toggle" class="icon" title="hide/show the panel (key: b)">☰</button>
   <label>map
     <select id="map-picker" title="press 1–9 to switch archive; the view is kept
 so two renderings of the same index can be compared"></select>
@@ -36,6 +35,9 @@ border coloured when the tile is upscaled or over-zoomed rather than stored (key
   </span>
   <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
   <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
+  <label class="toggle" title="pan to each render as it lands, so a long run can be
+watched without touching the mouse. Needs live; a render already fully on screen
+does not move the map."><input type="checkbox" id="follow-toggle"> follow new</label>
   <button id="reload-tiles" class="icon" title="refetch every visible tile (key: r)">⟳</button>
   <select id="pyramid-mode" title="how the zoom pyramid is built.
 scale: average four tiles into one — the classic pyramid.
@@ -47,16 +49,39 @@ into static.">
   </select>
   <button id="build-map" class="icon" title="build the zoom pyramid and re-serialize the archive">⛰ build</button>
   <span id="pulse" class="pulse"></span>
+  <!-- Beside the panel it opens, at the right end of the bar. -->
+  <button id="panel-toggle" class="icon" title="hide/show the panel (key: b)">☰</button>
 </header>
 
 <main>
-  <aside id="left">
+  <div id="map"></div>
+
+  <aside id="panel">
     <div class="tabs" role="tablist">
+      <button id="tab-info" class="tab" role="tab" title="how the tile under the
+cursor was made (clicking the map opens this)">info</button>
       <button id="tab-search" class="tab active" role="tab">search</button>
       <button id="tab-saved" class="tab" role="tab">liked <span id="saved-count" class="badge"></span></button>
       <button id="tab-marks" class="tab" role="tab">marks <span id="marks-count" class="badge"></span></button>
       <button id="tab-help" class="tab tab-narrow" role="tab" title="what everything does (key: ?)">?</button>
     </div>
+
+    <section id="pane-info" class="pane-body" role="tabpanel" hidden>
+      <div id="info-empty" class="empty">Click a tile to see how it was made.</div>
+      <div id="info-body" hidden>
+        <div class="coord">
+          <code id="tile-coord"></code>
+          <button id="copy-coord" title="copy z/x/y">copy</button>
+          <button id="open-preview" title="full original image (or double-click the map)">⤢</button>
+        </div>
+        <img id="tile-thumb" alt="tile">
+        <dl id="tile-fields"></dl>
+        <details id="tile-raw-wrap">
+          <summary>raw metadata</summary>
+          <pre id="tile-raw"></pre>
+        </details>
+      </div>
+    </section>
 
     <section id="pane-search" class="pane-body" role="tabpanel">
       <input id="search-input" type="search" autocomplete="off"
@@ -106,7 +131,8 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
       <dl>
         <dt>drag</dt><dd>pan</dd>
         <dt>wheel</dt><dd>zoom, one level per notch</dd>
-        <dt>click</dt><dd>show how that render was made, in the right pane</dd>
+        <dt>click</dt><dd>show how that render was made, in the <b>info</b> tab
+          — which the click opens</dd>
         <dt>double-click</dt><dd>the full original image, stitched from the
           lossless store rather than the archive's WebP</dd>
       </dl>
@@ -130,6 +156,11 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
           (<kbd>d</kbd>)</dd>
         <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
           each one as it changes</dd>
+        <dt>follow new</dt><dd>pan to each render as it lands — a long run can be
+          watched without touching the mouse. Only the deepest level counts, so
+          building the pyramid does not drag the view around; a render already
+          fully on screen is outlined but does not move the map. Needs
+          <b>live</b></dd>
         <dt>⟳</dt><dd>refetch everything visible without moving (<kbd>r</kbd>)</dd>
         <dt>⛰ build</dt><dd>build the zoom pyramid and re-serialize the archive.
           The picker beside it chooses how: <b>scale</b> averages four tiles into
@@ -137,6 +168,17 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
           render would go under 64 px and takes a quarter of each of the four
           instead, so the shallow levels stay legible rather than turning to
           static. Building records the choice on the map</dd>
+        <dt>☰</dt><dd>hide/show this panel (<kbd>b</kbd>)</dd>
+      </dl>
+
+      <h3>info</h3>
+      <p>How the tile you clicked was made: prompt, seed, sampler, models, and
+        the raw metadata under the fold. Clicking the map opens this tab;
+        following a search result or a liked row does not, so a pass through a
+        list stays on the list.</p>
+      <dl>
+        <dt>copy</dt><dd>the tile's <code>z/x/y</code></dd>
+        <dt>⤢</dt><dd>the full original image, same as double-clicking the map</dd>
       </dl>
 
       <h3>search</h3>
@@ -193,30 +235,11 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 
       <h3>Everywhere</h3>
       <dl>
-        <dt><kbd>b</kbd></dt><dd>hide/show this pane</dd>
+        <dt><kbd>b</kbd></dt><dd>hide/show this panel</dd>
         <dt><kbd>?</kbd></dt><dd>this help</dd>
         <dt><kbd>Esc</kbd></dt><dd>close the preview, else clear the marks</dd>
       </dl>
     </section>
-  </aside>
-
-  <div id="map"></div>
-
-  <aside id="side">
-    <div id="side-empty" class="empty">Click a tile to see how it was made.</div>
-    <div id="side-body" hidden>
-      <div class="coord">
-        <code id="tile-coord"></code>
-        <button id="copy-coord" title="copy z/x/y">copy</button>
-        <button id="open-preview" title="full original image (or double-click the map)">⤢</button>
-      </div>
-      <img id="tile-thumb" alt="tile">
-      <dl id="tile-fields"></dl>
-      <details id="tile-raw-wrap">
-        <summary>raw metadata</summary>
-        <pre id="tile-raw"></pre>
-      </details>
-    </div>
   </aside>
 </main>
 

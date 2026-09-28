@@ -35,17 +35,21 @@ select {
 main { flex: 1; display: flex; min-height: 0; }
 #map { flex: 1; background: #0d0f13; }
 
-/* Left pane: search and liked tiles, one tab each. */
-#left {
-  width: 310px; flex: none; display: flex; flex-direction: column;
-  border-right: 1px solid var(--line); background: var(--panel); min-height: 0;
+/* The side panel, right of the map: tile info, search, liked, marks and help,
+   one tab each. One panel rather than two, so the map gets the width back and
+   everything that describes a tile is in the same place. */
+#panel {
+  width: 340px; flex: none; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line); background: var(--panel); min-height: 0;
 }
-#left.hidden { display: none; }
+#panel.hidden { display: none; }
 .tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); }
 .tab {
   flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
-  border-radius: 0; color: var(--dim); padding: 8px 6px; cursor: pointer;
+  border-radius: 0; color: var(--dim); padding: 8px 4px; cursor: pointer;
   font: inherit;
+  /* Five tabs in 340px: a wrapped label would push the row to two lines. */
+  white-space: nowrap; overflow: hidden;
 }
 .tab:hover { color: var(--fg); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
@@ -72,10 +76,6 @@ button.icon.stale::after { content: ' •'; }
 .sel-info[hidden] { display: none; }
 .sel-info #sel-count { font-variant-numeric: tabular-nums; }
 
-aside {
-  width: 330px; flex: none; overflow-y: auto; padding: 12px;
-  border-left: 1px solid var(--line); background: var(--panel);
-}
 .empty { color: var(--dim); }
 .hint { color: var(--dim); font-size: 11px; margin: 6px 0 0; }
 .dim { color: var(--dim); }
