@@ -25,6 +25,10 @@
 
 https://github.com/user-attachments/assets/f2e7883f-9419-482b-9299-c7f7181ea85c
 
+🗺️ **[Open the live demo map](https://peko.github.io/comfyui-pmtiles-map/)** — 1024 renders,
+zoom in to full resolution, search by prompt. Served straight off GitHub Pages:
+one `.pmtiles` file read by range requests, no backend anywhere.
+
 Save ComfyUI renders into a **PMTiles v3** archive as map tiles, and browse the
 whole session as a zoomable map — with search, saved points of interest, live
 updates as renders land, and full-resolution previews.
