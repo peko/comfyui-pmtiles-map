@@ -280,12 +280,13 @@ class SavePMTilesMap:
                 lines.append(f"image {index}: {how} -> {nx}x{ny} tile(s) at "
                              f"z={z} x={x0} y={y0}")
 
-            # Leaves only. The coarse levels are missing, so say so: the viewer
-            # reads this flag to light its build button, and a map that claimed
-            # to be complete would just show holes when zoomed out.
+            # Leaves only, always -- the coarse levels and the archive are both
+            # O(whole map) and belong to the build step, never to a render.
+            # The flag is what carries that: the viewer reads it to light its
+            # build button, so a map missing its pyramid cannot look complete.
+            # It is not logged. Announcing "not built" every render would imply
+            # the node had a choice, and this node has never had one.
             store.set_map_meta("pyramid_stale", "1")
-            lines.append("pyramid: not built (viewer's build button, or "
-                         "tools/pmtiles_map.py --rebuild-pyramid)")
             # No separate archive quality is recorded: TileStore already stamps
             # `store_quality`, and the archive build and the on-demand encode
             # both read that one number, so they fill the same cache.
@@ -295,15 +296,12 @@ class SavePMTilesMap:
             # server, and unnecessary, since the shape is a property of the map
             # rather than of the tile.
             store.set_map_meta("render_block", f"{nx}x{ny}")
-            pending = store.bump_pending(len(placed))
+            # Counts how far the archive has fallen behind; the viewer shows it
+            # on the build button. Not logged for the same reason as above --
+            # the archive is re-serialized whole (135 MB per render on a 20k
+            # tile map), so building it here was never on the table.
+            store.bump_pending(len(placed))
             store.db.commit()
-            stats = store.stats()
-
-            # The archive is the client's job. It is re-serialized whole every
-            # time (135 MB per render on a 20k-tile map) for a file nothing on
-            # the map reads -- the viewer serves tiles from the store.
-            lines.append(f"archive: {pending} tile(s) pending of "
-                         f"{stats['tiles']} in the store — build from the viewer")
 
         text = "\n".join(lines)
         print(f"[pmtiles-map] {name}\n  " + "\n  ".join(lines))
