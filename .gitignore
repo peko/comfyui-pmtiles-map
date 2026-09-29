@@ -16,4 +16,5 @@ output_pmtiles_test/
 .DS_Store
 .idea/
 .vscode/
-docs/demo.mp4
+docs/demo_source.mp4
+*~

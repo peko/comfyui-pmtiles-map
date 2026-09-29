@@ -23,11 +23,13 @@
 - **Hoard packing** — scripts that fold your existing image piles into
   panoramas, no ComfyUI needed.
 
-![Demo](docs/demo.webp)
+https://github.com/peko/comfyui-pmtiles-map/raw/main/docs/demo.mp4
 
 Save ComfyUI renders into a **PMTiles v3** archive as map tiles, and browse the
 whole session as a zoomable map — with search, saved points of interest, live
 updates as renders land, and full-resolution previews.
+
+![A workflow writing into the map](docs/pmtiles_workflow.png)
 
 A long run leaves hundreds of loose PNGs that you scroll past once. This turns it
 into a map: every render has coordinates, the coarser zoom levels are built
@@ -78,6 +80,8 @@ The inputs are split **basic / advanced** — the advanced ones are hidden until
 the node's Advanced toggle is on (or `Comfy.Node.AlwaysShowAdvancedWidgets`
 is set), and outlined differently when shown. Basic is what changes per
 render; advanced describes the *map*, which is set once when it is created.
+
+![The node, collapsed and with advanced inputs shown](docs/pmtiles_node.png)
 
 **Basic:** `images`, `map_name`, `x`, `y`, `title`, `preview`.
 
