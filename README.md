@@ -23,9 +23,7 @@
 - **Hoard packing** — scripts that fold your existing image piles into
   panoramas, no ComfyUI needed.
 
-[![Watch the demo](docs/demo_poster.png)](https://github.com/peko/comfyui-pmtiles-map/raw/main/docs/demo.mp4)
-
-▶ **[Seven-minute walkthrough](https://github.com/peko/comfyui-pmtiles-map/raw/main/docs/demo.mp4)** — building a map, live renders landing on it, search, hearts, previews.
+https://github.com/user-attachments/assets/f2e7883f-9419-482b-9299-c7f7181ea85c
 
 Save ComfyUI renders into a **PMTiles v3** archive as map tiles, and browse the
 whole session as a zoomable map — with search, saved points of interest, live
