@@ -370,6 +370,130 @@ def search(db_path, query, limit=60):
     }
 
 
+def parse_tags(blob):
+    """`a:1,b:2` -> {"a": "1", "b": "2"}.
+
+    Split on the *first* colon, because a value routinely contains more of them
+    (`prompt:amazing scenery:1.2 gothic architecture`). A fragment with no
+    colon at all is not a pair -- it is the tail of the previous value, which a
+    comma inside it split off (`sda:['69:77', 0]`) -- so it is joined back on
+    rather than dropped, or the value would silently lose its end.
+    """
+    tags = {}
+    last = None
+    for part in (blob or "").split(","):
+        key, sep, value = part.partition(":")
+        if sep and key.strip() and " " not in key.strip():
+            last = key.strip()
+            tags[last] = value.strip()
+        elif last is not None:
+            tags[last] = f"{tags[last]},{part}"
+    return tags
+
+
+def _runs(values_by_index):
+    """[(start, end_exclusive, label)] over a sparse {index: label} map.
+
+    A run ends where the label changes *or* where the indices stop being
+    contiguous: two separate stretches of the same model are two runs, and
+    merging them would draw one label across the gap between them.
+    """
+    out = []
+    for index in sorted(values_by_index):
+        label = values_by_index[index]
+        if out and out[-1][2] == label and out[-1][1] == index:
+            out[-1][1] = index + 1
+        else:
+            out.append([index, index + 1, label])
+    return [(a, b, label) for a, b, label in out]
+
+
+def read_axes(db_path, x_key=None, y_key=None, zoom=None):
+    """Row and column headers for a grid-shaped map, out of the tiles' `tags`.
+
+    A sweep writes what it varied into every tile it saves -- `model:…`,
+    `prompt:…`, `lora:…` -- so a map that is a table already carries its own
+    axis labels and nothing new has to be recorded. This reads them back.
+
+    Which tag is which axis is *measured*, not configured: a key that belongs
+    to the x axis has one value per column (constant down it) and more than one
+    value overall. Score both directions per key, take the best, and let the
+    caller override. A map whose tags are the same everywhere (or that has
+    none) scores nothing and gets no axes, which is correct -- it is not a
+    table.
+    """
+    with reading(db_path) as db:
+        if db is None:
+            return None
+        try:
+            if zoom is None:
+                row = db.execute(
+                    "SELECT max(z) FROM tiles WHERE kind = 'leaf'").fetchone()
+                zoom = None if row is None or row[0] is None else int(row[0])
+            if zoom is None:
+                return None
+            rows = db.execute(
+                "SELECT x, y, json_extract(meta,'$.tags') FROM tile_meta "
+                "WHERE z = ? AND json_extract(meta,'$.tags') IS NOT NULL "
+                "AND json_extract(meta,'$.tags') != ''", (int(zoom),)).fetchall()
+        except sqlite3.Error:
+            return None
+
+    # key -> axis -> index -> set of values seen there
+    seen = {}
+    for x, y, blob in rows:
+        for key, value in parse_tags(blob).items():
+            per_key = seen.setdefault(key, ({}, {}))
+            per_key[0].setdefault(x, set()).add(value)
+            per_key[1].setdefault(y, set()).add(value)
+
+    def score(by_index):
+        """How well this key explains one axis: 0 when it is not a function of
+        it, 1 when every slot holds exactly one value. A key with a single
+        value across the whole map explains nothing and scores 0."""
+        if not by_index:
+            return 0.0
+        distinct = {v for values in by_index.values() for v in values}
+        if len(distinct) < 2:
+            return 0.0
+        pure = sum(1 for values in by_index.values() if len(values) == 1)
+        return pure / len(by_index)
+
+    scores = {key: (score(per_key[0]), score(per_key[1]))
+              for key, per_key in seen.items()}
+
+    def pick(axis, wanted, taken):
+        if wanted:
+            return wanted if wanted in seen else None
+        best = sorted(((s[axis], key) for key, s in scores.items()
+                       if key != taken and s[axis] > 0.5),
+                      reverse=True)
+        return best[0][1] if best else None
+
+    chosen_x = pick(0, x_key, None)
+    chosen_y = pick(1, y_key, chosen_x)
+    if x_key and chosen_y == chosen_x:
+        chosen_y = None
+
+    def ticks(key, axis):
+        if not key or key not in seen:
+            return []
+        # Only slots the key actually explains: a column holding two values of
+        # this key has no single name, so it gets none rather than one of them.
+        return _runs({index: next(iter(values))
+                      for index, values in seen[key][axis].items()
+                      if len(values) == 1})
+
+    return {
+        "zoom": zoom,
+        "keys": sorted(seen),
+        "scores": {key: {"x": round(s[0], 3), "y": round(s[1], 3)}
+                   for key, s in scores.items()},
+        "x": {"key": chosen_x, "ticks": ticks(chosen_x, 0)},
+        "y": {"key": chosen_y, "ticks": ticks(chosen_y, 1)},
+    }
+
+
 def write_webp_cache(db_path, z, x, y, blob, quality):
     """Best-effort: keep an on-the-fly encode for next time.
 

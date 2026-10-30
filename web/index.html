@@ -28,6 +28,11 @@ archive: reads the .pmtiles itself — what would be uploaded to a CDN.">src
 (dims the tiles), ctrl-drag deselects. Esc clears. (key: x)"><input type="checkbox" id="select-toggle"> mark</label>
   <label class="toggle" title="per-tile z/x/y, map zoom and corner lat/lng, with the
 border coloured when the tile is upscaled or over-zoomed rather than stored (key: d)"><input type="checkbox" id="debug-toggle"> debug</label>
+  <label class="toggle" title="row and column headers along the edges of the map,
+like a spreadsheet's frozen headers. The names come from the renders' own tags;
+only what is on screen is drawn (key: i)"><input type="checkbox" id="axes-toggle"> index</label>
+  <select id="axis-y-key" title="which tag names the rows" hidden></select>
+  <select id="axis-x-key" title="which tag names the columns" hidden></select>
   <span id="sel-info" class="sel-info" hidden>
     <span id="sel-count"></span>
     <button id="sel-copy" class="icon" title="copy the selected coordinates as JSON">copy</button>
@@ -154,6 +159,14 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
           lat/lng. The border says where the tile came from: blue stored, green
           upscaled from a shallower level, amber over-zoomed past the deepest
           (<kbd>d</kbd>)</dd>
+        <dt>index</dt><dd>row and column headers along the edges, the way a
+          spreadsheet freezes them (<kbd>i</kbd>). The names are the renders'
+          own tags — the two pickers beside the box choose which tag names the
+          rows and which the columns, and the map's own tags are what they
+          offer. A header stays at the edge while any part of its row or column
+          is on screen, and clicking it frames that row or column. A map that
+          is not a table (one block per prompt, a lattice of models inside it)
+          has no axis to name and says so</dd>
         <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
           each one as it changes</dd>
         <dt>follow new</dt><dd>pan to each render as it lands — a long run can be
@@ -179,6 +192,12 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
       <dl>
         <dt>copy</dt><dd>the tile's <code>z/x/y</code></dd>
         <dt>⤢</dt><dd>the full original image, same as double-clicking the map</dd>
+        <dt>models</dt><dd>the file each model was called in the graph. With a
+          model catalogue on the box they link to where the model came from —
+          Civitai or HuggingFace — under the model's own name, version, base and
+          author. Matching is by <b>sha256</b> where the tile recorded one, so a
+          model renamed since the render still resolves and the row says what it
+          is called now. No catalogue, no links: the names stay as they were</dd>
       </dl>
 
       <h3>search</h3>
@@ -259,5 +278,6 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 <script src="assets/viewer.js"></script>
 <script src="assets/overlays.js"></script>
 <script src="assets/like.js"></script>
+<script src="assets/axes.js"></script>
 </body>
 </html>

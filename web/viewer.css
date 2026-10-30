@@ -24,7 +24,13 @@ select {
   background: #262a33; color: var(--fg); border: 1px solid var(--line);
   border-radius: 5px; padding: 4px 8px; font: inherit;
 }
-.stats { color: var(--dim); font-variant-numeric: tabular-nums; }
+.stats {
+  color: var(--dim); font-variant-numeric: tabular-nums;
+  /* The bar is one row: a long stats line truncates rather than wrapping the
+     whole header into three. min-width:0 is what lets a flex item shrink. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 7em;
+}
+header > label, .toggle, header button { flex: none; white-space: nowrap; }
 .toggle { user-select: none; cursor: pointer; }
 .pulse {
   width: 8px; height: 8px; border-radius: 50%; background: #3a4150;
@@ -70,6 +76,61 @@ button.icon.stale::after { content: ' •'; }
 /* The canvas overlays sit above the tiles and must never swallow a click --
  * every gesture on the map belongs to the map. */
 .pm-overlay-tile { pointer-events: none; }
+
+/* Row/column headers (axes.js). Pinned to the map CONTAINER, not to a Leaflet
+   pane: they must stay at the edge while the map pans under them. Both strips
+   start at the container's origin so a label's `left`/`top` is the container
+   coordinate the projection already gave us, with no offset to keep in step;
+   the corner patch covers where they cross. */
+:root { --axis-h: 22px; --axis-w: 22px; }
+.pm-axis { position: absolute; z-index: 650; pointer-events: none; overflow: hidden; }
+.pm-axis-x { top: 0; left: 0; right: 0; height: var(--axis-h); }
+.pm-axis-y { top: 0; left: 0; bottom: 0; width: var(--axis-w); }
+.pm-axis-corner {
+  position: absolute; z-index: 660; top: 0; left: 0;
+  width: var(--axis-w); height: var(--axis-h);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel); border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.pm-axis[hidden], .pm-axis-corner[hidden] { display: none; }
+.pm-axis-cell {
+  position: absolute; pointer-events: auto; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  /* No box: the only marks are the two 1px rules saying where the run begins
+     and ends, plus a scrim that fades from the edge of the map into it --
+     dark enough under the text to carry it over a bright render, gone by the
+     time it reaches the picture. The rules are white rather than --line:
+     without a solid fill behind it a #2e323c hairline vanishes over a pale
+     render. */
+  border: 0;
+  color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, .5);
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pm-axis-cell:hover { color: var(--accent); }
+.pm-axis-x .pm-axis-cell {
+  top: 0; height: var(--axis-h); padding: 0 5px;
+  border-left: 1px solid rgba(255, 255, 255, .45);
+  border-right: 1px solid rgba(255, 255, 255, .45);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
+}
+/* Rows read bottom-to-top, the way a chart's y axis is labelled. Vertical text
+   also lets the strip be a 22px gutter instead of the 140px one a horizontal
+   name needed -- which was a whole column of renders covered up. */
+.pm-axis-y .pm-axis-cell {
+  left: 0; width: var(--axis-w); padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, .45);
+  border-bottom: 1px solid rgba(255, 255, 255, .45);
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  /* `to left` and not `to right`: the 180deg that turns the text the right way
+     up mirrors the background with it, so the dark end has to be declared on
+     the side it is NOT meant to appear. */
+  background: linear-gradient(to left, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
+}
+/* Leaflet's zoom control lives exactly where the corner patch goes. */
+#map.axes .leaflet-top.leaflet-left { margin: var(--axis-h) 0 0 var(--axis-w); }
 .sel-info { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
 /* An author `display` beats the UA stylesheet's `[hidden] { display: none }`
  * whatever the specificity, so a flex container needs to hide itself. */
@@ -125,6 +186,16 @@ button:hover { border-color: var(--accent); }
   width: 100%; image-rendering: pixelated; border: 1px solid var(--line);
   border-radius: 6px; background: #0d0f13; display: block;
 }
+/* The models a render used: the file name as the graph had it, linked to where
+   the model came from when the catalogue knows, with what it is underneath. */
+.models { list-style: none; margin: 0; padding: 0; white-space: normal; }
+.models li { margin: 0 0 7px; }
+.models li:last-child { margin-bottom: 0; }
+.models .file, .models a { display: block; word-break: break-all; }
+.models a { color: var(--accent); text-decoration: none; }
+.models a:hover { text-decoration: underline; }
+.models .origin { display: block; color: var(--dim); font-size: 11px; }
+
 dl { margin: 12px 0 0; }
 dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 dd { margin: 2px 0 10px; word-break: break-word; white-space: pre-wrap; }

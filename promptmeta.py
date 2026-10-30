@@ -21,6 +21,33 @@ _TEXT_KEYS = ("text", "text_g", "text_l", "prompt", "populated_text",
               "wildcard_text")
 
 
+def _model_hashes(models):
+    """sha256 per model name, resolved against the catalogue *now*.
+
+    A file name is not a stable identifier for a model: files get renamed, and
+    ComfyUI's name for one is its path under `models/<kind>`, so moving it
+    between subfolders renames it as well. The name is only reliably resolvable
+    at the moment the render happens -- so resolve it here and record the hash,
+    and the viewer can still find the model a year and two reorganisations
+    later.
+
+    Optional on both ends: no catalogue, no hashes, and the viewer falls back
+    to matching on the name. Like everything else in this module it must not
+    raise on an unfamiliar box.
+    """
+    try:
+        try:
+            from . import catalogue
+        except ImportError:
+            import catalogue
+        found = catalogue.lookup(models)
+    except Exception:
+        return None
+    hashes = {name: entry["sha256"] for name, entry in found.items()
+              if entry.get("sha256")}
+    return hashes or None
+
+
 def _is_link(value):
     return isinstance(value, list) and len(value) == 2 and isinstance(value[1], int)
 
@@ -162,6 +189,9 @@ def summarize_prompt(prompt, extra_pnginfo=None, extra=None):
                     models.append(value)
     if models:
         meta["models"] = models
+        hashes = _model_hashes(models)
+        if hashes:
+            meta["model_hashes"] = hashes
 
     for node in prompt.values():
         inputs = node.get("inputs", {})

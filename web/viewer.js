@@ -335,6 +335,8 @@ function showMap(info) {
   // like.js, likewise: the hearts are placed in archive coordinates, and the
   // liked list is filtered by map name.
   if (typeof likesMapChanged === 'function') likesMapChanged();
+  // axes.js: the row/column names come from this archive's own tags.
+  if (typeof axesMapChanged === 'function') axesMapChanged(info);
 
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
@@ -421,7 +423,11 @@ function describe(coord, meta) {
       const dt = document.createElement('dt');
       dt.textContent = label;
       const dd = document.createElement('dd');
-      dd.textContent = Array.isArray(meta[key]) ? meta[key].join(' × ') : String(meta[key]);
+      if (key === 'models' && Array.isArray(meta.models)) {
+        renderModels(dd, meta.models, meta.model_hashes || {});
+      } else {
+        dd.textContent = Array.isArray(meta[key]) ? meta[key].join(' × ') : String(meta[key]);
+      }
       dl.append(dt, dd);
     }
   }
@@ -436,6 +442,119 @@ function describe(coord, meta) {
     ? { ix: meta.grid[0], iy: meta.grid[1], nx: meta.grid[2], ny: meta.grid[3] }
     : null;
   markActive();
+}
+
+/* -------------------------------------------------------------- models block */
+/* `models` records the file names the graph used, which says what ran but not
+ * what the model *is* or where to get it. /map/models answers that out of the
+ * model catalogue, if the box has one -- Civitai / HuggingFace page, model and
+ * version name, base, author.
+ *
+ * Resolution is by **sha256** where the tile has one (`model_hashes`, recorded
+ * by the saver while the name was still current), and by name otherwise. Files
+ * get renamed locally, so a name alone stops resolving -- or, worse, resolves
+ * to a different file. The name shown stays the one the render used; when the
+ * hash matched something that is called something else today, the row says so.
+ *
+ * With no catalogue every name simply stays plain text, which is what this
+ * field has always been.
+ */
+
+const modelCache = new Map();           // sha256-or-name -> entry | null
+
+function modelKey(item) {
+  return String(item.sha || item.name || '').toLowerCase();
+}
+
+/** Catalogue entries for a tile's models, cached across clicks. */
+async function lookupModels(items) {
+  // A box with no catalogue is the normal case for anyone who has not built
+  // one: once the server has said so, stop asking on every click. A catalogue
+  // added later is picked up on the next page load.
+  if (state.noCatalog) return new Map();
+  const want = items.filter((it) => !modelCache.has(modelKey(it)));
+  if (want.length) {
+    const q = new URLSearchParams();
+    // sha first, name after the colon: the hash is hex, so the first colon
+    // splits it even when a file name contains one.
+    for (const it of want) q.append('m', `${it.sha || ''}:${it.name}`);
+    try {
+      const res = await fetch(`/map/models?${q}`);
+      const payload = res.ok ? await res.json() : null;
+      if (!payload) return new Map();
+      if (payload.catalog === false) { state.noCatalog = true; return new Map(); }
+      const found = payload.models || {};
+      // A miss is cached as null -- a box with no catalogue must not re-ask on
+      // every click. A *failed* request is not cached at all.
+      for (const it of want) modelCache.set(modelKey(it), found[it.name] || null);
+    } catch (err) {
+      return new Map();
+    }
+  }
+  const out = new Map();
+  for (const it of items) out.set(it.name, modelCache.get(modelKey(it)) || null);
+  return out;
+}
+
+function renderModels(dd, names, hashes) {
+  const items = names.map((name) => ({ name, sha: hashes[name] || '' }));
+  const list = document.createElement('ul');
+  list.className = 'models';
+  const rows = new Map();
+  for (const item of items) {
+    const li = document.createElement('li');
+    const file = document.createElement('span');
+    file.className = 'file';
+    file.textContent = item.name;
+    li.append(file);
+    rows.set(item.name, { li, file });
+    list.append(li);
+  }
+  dd.append(list);
+  // The names are already on screen; the catalogue fills in behind them. A
+  // click must never wait on a lookup to show what it clicked.
+  lookupModels(items).then((info) => {
+    for (const [name, entry] of info) {
+      const row = rows.get(name);
+      // The pane may have been rebuilt under a newer click while this was in
+      // flight -- `rows` belongs to that render, so a stale reply updates
+      // detached nodes and nothing else.
+      if (row && entry) decorateModel(row, entry);
+    }
+  });
+}
+
+function decorateModel(row, entry) {
+  if (entry.url) {
+    const link = document.createElement('a');
+    link.href = entry.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = row.file.textContent;
+    try {
+      link.title = `open on ${new URL(entry.url).host}`;
+    } catch (err) { /* a URL we cannot parse is still worth linking */ }
+    row.file.replaceWith(link);
+  }
+  const bits = [];
+  const same = (a, b) => a && b && a.toLowerCase() === b.toLowerCase();
+  // A HuggingFace sidecar records the *file* as the version, so "Anima
+  // qwen_3_06b_base.safetensors · Anima" is the file name a second time and
+  // the model name a third. Drop a version that is a file, and a base that
+  // only repeats the model.
+  const version = (entry.version && !/\.(safetensors|ckpt|gguf|pt|pth|sft)$/i
+    .test(entry.version) && !same(entry.version, entry.model)) ? entry.version : '';
+  if (entry.model) bits.push(version ? `${entry.model} ${version}` : entry.model);
+  if (entry.base && !same(entry.base, entry.model)) bits.push(entry.base);
+  if (entry.creator) bits.push(`by ${entry.creator}`);
+  // Renamed since the render: the row above is the name that ran, this is where
+  // the same bytes live now.
+  if (entry.renamed && entry.comfy_name) bits.push(`now ${entry.comfy_name}`);
+  if (!bits.length) return;
+  const origin = document.createElement('span');
+  origin.className = 'origin';
+  origin.textContent = bits.join(' · ');
+  row.li.append(origin);
 }
 
 /** One tile's metadata, fetched on demand -- the whole-map blob is megabytes on

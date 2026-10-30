@@ -20,9 +20,10 @@ import re
 from aiohttp import web
 
 try:
-    from . import archive, tilestore
+    from . import archive, catalogue, tilestore
 except ImportError:
     import archive
+    import catalogue
     import tilestore
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -157,6 +158,32 @@ def build_routes(maps_dir_fn):
     @routes.get("/map/list")
     async def maps(request):
         return web.json_response({"maps": archive.list_archives(maps_dir_fn())})
+
+    @routes.get("/map/models")
+    async def models(request):
+        """Where the models behind a render came from.
+
+        Takes repeated `m=<sha256>:<name>` -- the hash first, because that is
+        what survives a local rename, and the name only as a fallback for maps
+        saved before the saver recorded hashes. Either half may be empty.
+        `name=` alone is accepted too, for poking at it with curl.
+
+        A fixed path segment, so it cannot be shadowed by a map called
+        "models": every per-map route has at least one more segment.
+        """
+        items = []
+        for raw in request.query.getall("m", []):
+            sha, _, name = raw.partition(":")
+            # The hash is hex, so the first colon is unambiguous even for a
+            # file name that contains one.
+            items.append({"sha256": sha, "name": name})
+        items += [{"name": n} for n in request.query.getall("name", [])]
+        if len(items) > 64:
+            raise web.HTTPBadRequest(reason="too many models in one lookup")
+        info = catalogue.status()
+        info.pop("path", None)           # an absolute path is the server's business
+        info["models"] = catalogue.lookup(items) if items else {}
+        return web.json_response(info, headers={"Cache-Control": "no-cache"})
 
     @routes.get("/map/{name}/meta.json")
     async def meta(request):
@@ -449,6 +476,25 @@ def build_routes(maps_dir_fn):
                      "X-Zoom": str(z), "X-Side": str(side),
                      "Cache-Control": "no-cache"},
         )
+
+    @routes.get("/map/{name}/axes")
+    async def axes(request):
+        """Row/column headers for a grid-shaped map, from the tiles' own tags.
+
+        `?x=key&y=key` overrides the auto-detected pair. Computed per request
+        rather than cached: one scan of `tile_meta` at the leaf zoom, which is
+        the same shape of query as search (0.04 s over 5463 rows), and the
+        client asks once per map.
+        """
+        name = request.match_info["name"]
+        _require_map(maps_dir_fn(), name)
+        found = tilestore.read_axes(
+            os.path.join(maps_dir_fn(), f"{name}.tiles.db"),
+            x_key=request.query.get("x") or None,
+            y_key=request.query.get("y") or None)
+        if found is None:
+            raise web.HTTPNotFound(reason="no store to read axis tags from")
+        return web.json_response(found, headers={"Cache-Control": "no-cache"})
 
     @routes.get("/map/{name}/changes")
     async def changes(request):

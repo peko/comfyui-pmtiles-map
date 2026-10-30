@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)          # the CLI tools are siblings, not pack modules
 from PIL import Image   # noqa: E402
 
 import archive          # noqa: E402
+import catalogue        # noqa: E402
 import paths            # noqa: E402
 import hilbert          # noqa: E402
 import imgimport        # noqa: E402
@@ -819,6 +820,19 @@ def main():
     # no tile_webp at all. Serving opens the store read-only, so it cannot
     # create one -- it has to fall back rather than report a hole.
     legacy_db = os.path.join(args.out, "legacy.tiles.db")
+    # Both halves matter, and both only bite on a re-run into an existing
+    # --out, which is why this looked like a flake:
+    #   * copyfile replaces the main file but not the -wal beside it, so the
+    #     previous run's log is left pointing into a database that no longer
+    #     exists -> "database disk image is malformed" on the first write;
+    #   * and the source is WAL too, so its own log has to be folded in or the
+    #     copy is a stale snapshot.
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(legacy_db + suffix):
+            os.remove(legacy_db + suffix)
+    flush = sqlite3.connect(cache_db)
+    flush.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    flush.close()
     shutil.copyfile(cache_db, legacy_db)
     legacy = sqlite3.connect(legacy_db)
     legacy.execute("UPDATE tiles SET webp = ?, webp_q = 80 WHERE z=3 AND x=2 AND y=0",
@@ -1415,6 +1429,208 @@ def main():
             sys.modules.pop("folder_paths", None)
         else:
             sys.modules["folder_paths"] = saved_fp
+
+    # ------------------------------------------------------------------ 26
+    print("26. models link back to the catalogue, when there is one")
+
+    # The catalogue is optional and lives outside this pack, so the thing worth
+    # asserting is the contract: which column answers, what happens to a file
+    # that has been renamed since the render, and that a box without one is
+    # unaffected.
+    cat_db = os.path.join(args.out, "catalog.sqlite")
+    # Re-runs land in the same --out, and both of these have to start empty:
+    # the fake catalogue is CREATEd, and the map below is asserted to have *no*
+    # hashes yet.
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(cat_db + suffix):
+            os.remove(cat_db + suffix)
+    shutil.rmtree(os.path.join(args.out, "backfill"), ignore_errors=True)
+    cat = sqlite3.connect(cat_db)
+    cat.execute("""CREATE TABLE files (
+        root TEXT, path TEXT, kind TEXT, comfy_name TEXT, file TEXT, ext TEXT,
+        size INTEGER, mtime INTEGER, precision TEXT, dtypes TEXT, sha256 TEXT,
+        sidecar TEXT, source TEXT, model_name TEXT, version_name TEXT,
+        model_id INTEGER, version_id INTEGER, base_model TEXT, model_type TEXT,
+        creator TEXT, original_filename TEXT, hf_repo TEXT, hf_file TEXT,
+        url TEXT, quantization TEXT, source_sha256 TEXT, origin_note TEXT,
+        trained_words TEXT, tags TEXT, downloads INTEGER, thumbs_up INTEGER,
+        model_downloads INTEGER, model_thumbs_up INTEGER, stats_at TEXT,
+        stats_source TEXT, PRIMARY KEY (root, path))""")
+    cat.executemany(
+        "INSERT INTO files (root, path, kind, comfy_name, file, sha256, source,"
+        " model_name, version_name, model_id, version_id, base_model, creator,"
+        " hf_repo, hf_file, url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            # A stored URL, on a host that is not civitai.com.
+            ("netac", "checkpoints/sets/alpha.safetensors", "checkpoints",
+             "sets/alpha.safetensors", "alpha.safetensors", "A" * 64, "civitai",
+             "Alpha", "v2", 11, 22, "Illustrious", "someone", None, None,
+             "https://civitai.example/models/11?modelVersionId=22"),
+            # Ids but no URL: the link has to be reconstructed, and against the
+            # same host the row above used.
+            ("netac", "loras/beta.safetensors", "loras", "beta.safetensors",
+             "beta.safetensors", "B" * 64, "lora-manager", "Beta", None, 33, 44,
+             None, None, None, None, ""),
+            # HuggingFace, repo + file, no URL.
+            ("netac", "diffusion_models/gamma.safetensors", "diffusion_models",
+             "gamma.safetensors", "gamma.safetensors", "C" * 64, "huggingface",
+             "Repacked", None, None, None, None, "Org", "Org/Repacked",
+             "split/gamma.safetensors", ""),
+        ])
+    cat.commit()
+    cat.close()
+
+    saved_env = os.environ.get(catalogue.ENV_VAR)
+    os.environ[catalogue.ENV_VAR] = cat_db
+    try:
+        hit = catalogue.lookup(["sets/alpha.safetensors"])["sets/alpha.safetensors"]
+        check("the full ComfyUI name resolves",
+              hit["model"] == "Alpha" and hit["matched_by"] == "name", str(hit))
+        check("and the stored URL is used verbatim",
+              hit["url"] == "https://civitai.example/models/11?modelVersionId=22",
+              hit["url"])
+        check("a bare basename resolves too -- a map may predate a reorganisation",
+              "alpha.safetensors" in catalogue.lookup(["alpha.safetensors"]))
+
+        # The point of recording hashes: this name does not exist any more.
+        renamed = catalogue.lookup(
+            [{"name": "old/was-alpha.safetensors", "sha256": "a" * 64}])
+        row = renamed.get("old/was-alpha.safetensors")
+        check("a renamed model still resolves, by hash",
+              row is not None and row["matched_by"] == "sha256", str(row))
+        check("and says what it is called now",
+              row and row["renamed"] and row["comfy_name"] == "sets/alpha.safetensors",
+              str(row and row["comfy_name"]))
+
+        beta = catalogue.lookup(["beta.safetensors"])["beta.safetensors"]
+        check("a row with ids but no URL gets one built",
+              beta["url"] == "https://civitai.example/models/33?modelVersionId=44",
+              beta["url"])
+        gamma = catalogue.lookup(["gamma.safetensors"])["gamma.safetensors"]
+        check("a HuggingFace row links the file, not just the repo",
+              gamma["url"] == "https://huggingface.co/Org/Repacked/blob/main/"
+                              "split/gamma.safetensors", gamma["url"])
+        check("an unknown model is simply absent",
+              catalogue.lookup(["nothing.safetensors"]) == {})
+        check("the saver records a hash per model it can resolve",
+              promptmeta.summarize_prompt(
+                  {"1": {"class_type": "CheckpointLoaderSimple",
+                         "inputs": {"ckpt_name": "sets/alpha.safetensors"}}},
+                  None).get("model_hashes") == {"sets/alpha.safetensors": "a" * 64})
+
+        # And the backfill: an existing map carries names only, so the hashes
+        # have to be resolvable and written after the fact.
+        import backfill_model_links
+        back_dir = os.path.join(args.out, "backfill")
+        os.makedirs(back_dir, exist_ok=True)
+        with tilestore.TileStore(os.path.join(back_dir, "old.tiles.db")) as old:
+            old.put_tile(0, 0, 0, Image.new("RGB", (ts, ts), (9, 9, 9)),
+                         meta={"models": ["sets/alpha.safetensors",
+                                          "nothing.safetensors"]})
+            old.db.commit()
+        check("backfill writes a hash into a map that had none",
+              backfill_model_links.backfill("old", back_dir, dry_run=True) == 1)
+        backfill_model_links.backfill("old", back_dir)
+        with tilestore.TileStore(os.path.join(back_dir, "old.tiles.db")) as old:
+            written = old.get_meta(0, 0, 0).get("model_hashes")
+        check("only the models it could resolve",
+              written == {"sets/alpha.safetensors": "a" * 64}, str(written))
+        check("and running it again changes nothing",
+              backfill_model_links.backfill("old", back_dir) == 0)
+
+        # The one thing a later run cannot do on its own: a file renamed before
+        # it ran. A table of what the rename did is the only way back.
+        tsv = os.path.join(back_dir, "renames.tsv")
+        with open(tsv, "w", encoding="utf-8") as fh:
+            fh.write("path\tnew_path\nold/gone.safetensors\tsets/alpha.safetensors\n")
+        renames = backfill_model_links.load_renames([tsv])
+        got = backfill_model_links.resolve_names({"old/gone.safetensors"}, renames)
+        check("a rename table recovers a name the catalogue cannot know",
+              got.get("old/gone.safetensors", {}).get("sha256") == "a" * 64
+              and got["old/gone.safetensors"]["matched_by"] == "rename",
+              str(got))
+        with open(tsv, "w", encoding="utf-8") as fh:
+            fh.write("path\toriginal_name\tnew_name\n"
+                     "sub/gone.safetensors\tgone\trenamed\n")
+        check("a bare new_name is read as a stem beside the old file",
+              backfill_model_links.load_renames([tsv])
+              == {"sub/gone.safetensors": "sub/renamed.safetensors"},
+              str(backfill_model_links.load_renames([tsv])))
+
+        os.environ[catalogue.ENV_VAR] = os.path.join(args.out, "no-such.sqlite")
+        check("no catalogue: nothing resolves, nothing raises",
+              catalogue.lookup(["alpha.safetensors"]) == {}
+              and catalogue.status()["catalog"] is False)
+        check("and the saver leaves the metadata exactly as it was",
+              "model_hashes" not in promptmeta.summarize_prompt(
+                  {"1": {"class_type": "CheckpointLoaderSimple",
+                         "inputs": {"ckpt_name": "sets/alpha.safetensors"}}}, None))
+    finally:
+        if saved_env is None:
+            os.environ.pop(catalogue.ENV_VAR, None)
+        else:
+            os.environ[catalogue.ENV_VAR] = saved_env
+
+    # ------------------------------------------------------------------ 27
+    print("27. row/column headers are measured out of the tiles' tags")
+
+    check("a value may contain colons",
+          tilestore.parse_tags("model:a,prompt:scenery:1.2 night")
+          == {"model": "a", "prompt": "scenery:1.2 night"},
+          str(tilestore.parse_tags("model:a,prompt:scenery:1.2 night")))
+    # A comma inside a value splits it; the tail has no `key:` and must be
+    # joined back on rather than dropped or taken for a key.
+    check("and commas, which the split would otherwise eat",
+          tilestore.parse_tags("lora:none,sda:['69:77', 0]")
+          == {"lora": "none", "sda": "['69:77', 0]"},
+          str(tilestore.parse_tags("lora:none,sda:['69:77', 0]")))
+
+    axes_dir = os.path.join(args.out, "axes")
+    shutil.rmtree(axes_dir, ignore_errors=True)
+    os.makedirs(axes_dir, exist_ok=True)
+    axes_db = os.path.join(axes_dir, "table.tiles.db")
+    LORAS = ["none", "vassago", "incase"]
+    MODELS = ["alpha", "beta"]
+    with tilestore.TileStore(axes_db) as grid:
+        # A table: lora per column, model per row, each cell 2x2 tiles. `arch`
+        # is the same everywhere, which is what a key that explains nothing
+        # looks like.
+        for col, lora in enumerate(LORAS):
+            for row, model in enumerate(MODELS):
+                for dx in range(2):
+                    for dy in range(2):
+                        grid.put_tile(
+                            4, col * 2 + dx, row * 2 + dy,
+                            Image.new("RGB", (ts, ts), (col * 40, row * 40, 9)),
+                            meta={"kind": "leaf", "grid": [dx, dy, 2, 2],
+                                  "tags": f"lora:{lora},model:{model},arch:2b"})
+        grid.db.commit()
+
+    found = tilestore.read_axes(axes_db)
+    check("the axes are detected without being configured",
+          found["x"]["key"] == "lora" and found["y"]["key"] == "model",
+          f"x={found['x']['key']} y={found['y']['key']}")
+    check("a tag with one value everywhere explains nothing",
+          found["scores"]["arch"] == {"x": 0.0, "y": 0.0},
+          str(found["scores"]["arch"]))
+    check("ticks are [start, end) in archive tile units",
+          found["x"]["ticks"] == [(0, 2, "none"), (2, 4, "vassago"),
+                                  (4, 6, "incase")],
+          str(found["x"]["ticks"]))
+    check("one tick per row, spanning the row",
+          found["y"]["ticks"] == [(0, 2, "alpha"), (2, 4, "beta")],
+          str(found["y"]["ticks"]))
+    forced = tilestore.read_axes(axes_db, x_key="model", y_key="lora")
+    check("and either axis can be forced to another tag",
+          forced["x"]["key"] == "model" and forced["x"]["ticks"] == [],
+          str(forced["x"]["ticks"]))
+    # Two runs of the same label with a gap between them must not merge, or one
+    # header would be drawn across the gap as if it owned it.
+    check("equal labels either side of a gap stay two runs",
+          tilestore._runs({0: "a", 1: "a", 5: "a"})
+          == [(0, 2, "a"), (5, 6, "a")],
+          str(tilestore._runs({0: "a", 1: "a", 5: "a"})))
+    tilestore.close_readers()
 
     if args.bench is not None:
         for n in (args.bench or [100, 1000]):

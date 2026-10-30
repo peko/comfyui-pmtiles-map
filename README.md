@@ -328,6 +328,13 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   debounced to one pan, since a sliced render arrives one tile at a time. The
   whole render block is framed, not the corner tile the last event named, and a
   render already fully on screen is outlined without moving the map.
+* **Model links** (**info** tab, *optional*): the `models` field lists the file
+  each model was called in the graph. If the box has a model catalogue, each
+  line links to where that model came from — Civitai or HuggingFace — under its
+  own name, version, base model and author. **Without a catalogue nothing
+  changes**: the names stay the plain text they always were. See below.
+* **index** (top bar, `i`): row and column headers along the edges of the map,
+  the way a spreadsheet freezes them. See below.
 * **Search** (`/`): title, tags and prompt, one result per render.
   Clicking frames the whole render.
 * **Liked list**: saved points of interest in `localStorage`, drag to reorder,
@@ -365,6 +372,99 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   (widen the limits, place the view, clamp, tighten) rather than letting Leaflet
   clamp it — which would animate mid-switch and make the outgoing layer fetch
   tiles for a map you are leaving.
+
+### Row and column headers (`index`)
+
+A sweep is a table — a LoRA per column, a model per row — and once you are
+zoomed in far enough to compare two cells, nothing on screen says which row and
+column you are in. `index` puts the names back, pinned to the edges of the map
+like a spreadsheet's frozen headers, or the index grid on a paper map.
+
+**The names come from the map itself.** A sweep already writes what it varied
+into every tile's tags (`model:…`, `lora:…`, `prompt:…`, `seed:…`), so
+`/map/<name>/axes` measures which tag belongs to which axis — a key on the x
+axis has one value per column and more than one overall — and returns the runs.
+Nothing had to be recorded for it, and it works on maps rendered long before it
+existed. The two pickers beside the checkbox override the guess with any tag
+the map carries.
+
+Only what is on screen is drawn: a header stays at the edge for as long as any
+part of its row or column is visible, then leaves with it, and a run too thin
+to read at the current zoom is skipped rather than piled on top of its
+neighbours. Clicking a header frames that row or column.
+
+A map that is not a table says so. The grouped layouts (`--group-by-prompt`:
+one block per prompt, a 4×4 lattice of models inside it) have no column that
+holds a single value of anything, and the corner reads `— / —` rather than
+inventing an axis.
+
+Not a plugin, and deliberately so. Leaflet.EdgeMarker projects *off-screen*
+markers onto the viewport border with a rotated arrow — the opposite problem.
+leaflet.latlng-graticule has the right mechanism (a canvas sized to the
+container, redrawn on `move`, labels drawn at the edge) but all 532 lines of
+its content are degrees: ticks from lat/lng intervals, text from a dd/dms
+formatter, no hook for arbitrary strings. `web/axes.js` borrows the mechanism,
+about thirty lines of it, and gets its ticks from this map's own grid.
+
+### Linking a render back to its models (optional)
+
+A render records the models it used as file names, which is what ran but not
+what the model *is* or where to get it again. If the box has a **model
+catalogue** — an SQLite index of the weights with their Civitai / HuggingFace
+origin — the viewer turns those names into links.
+
+Entirely optional, on both ends. No catalogue: the `models` field is the same
+list of names it has always been, no links, no requests beyond the one that
+reports there is nothing to ask.
+
+Where it looks, in order:
+
+1. `PMTILES_MODEL_CATALOG` — a path, if you want to be explicit
+2. `catalog.sqlite` / `catalogue.sqlite` in any models root ComfyUI knows
+   about, including the extra roots from `extra_model_paths.yaml` (that is how
+   a catalogue on a second drive is found)
+3. `models/` at or above the pack, for the standalone server
+
+The schema it reads is the one [peko/civitai](https://github.com/peko/civitai)'s
+`model_catalog.py` writes: a table `files` with `comfy_name`, `file`, `sha256`,
+`kind`, `source`, `model_name`, `version_name`, `model_id`, `version_id`,
+`base_model`, `model_type`, `creator`, `hf_repo`, `hf_file`, `url`. Any index
+with those columns will do. The link is the stored `url` when there is one, and
+otherwise reconstructed from the Civitai ids or the HF repo — against whichever
+Civitai host the catalogue's own URLs use, so one panel never mixes two hosts.
+
+**Matching is by sha256, not by name.** Files get renamed locally, and ComfyUI
+names a model by its path under `models/<kind>`, so moving one between
+subfolders renames it too: a name recorded months ago may name nothing today,
+or name a *different* file. So the saver resolves each model while the name is
+still current and writes the hashes into the tile (`model_hashes`), and the
+lookup resolves the hash first. A model renamed since the render still links,
+and the row says what it is called now. Name matching stays as the fallback,
+which is what maps saved before this use.
+
+**Maps you already have** can be upgraded in place:
+
+```bash
+python tools/backfill_model_links.py --all --dry-run     # what it would resolve
+python tools/backfill_model_links.py --all
+```
+
+It resolves each map's model names against the catalogue *now* and writes the
+hashes into the tile metadata, so those maps become rename-proof like a fresh
+one. It can only recover what the catalogue still recognises — anything already
+renamed has nothing left to match on, and is reported rather than guessed at,
+which is the argument for running it early.
+
+Unless the rename was written down, that is: **`--renames <table>`** takes any
+TSV/CSV with an old and a new column (`path` / `new_name`, `old` / `new`, …),
+tries it on every name the catalogue does not know, and recovers links that
+were already lost — including moves between folders, which no amount of
+name matching would find.
+
+Only the SQLite store is written (`UPDATE tile_meta`: no pixels, no tile
+events), so a viewer open on the map keeps its tiles; `--rebuild` carries it
+into the `.pmtiles`. It is idempotent — a second run reports everything as
+already resolved and writes nothing.
 
 ### Selecting tiles, and seeing which level they came from
 
@@ -511,6 +611,8 @@ per-tab actions for search, liked and marks.
 | `GET /map/{name}/tiles/{z}/{x}/{y}.webp` | one tile; a hole is a transparent placeholder, `?missing=404` for strict semantics |
 | `GET /map/{name}/tilemeta/{z}/{x}/{y}` | that tile's metadata (store first, archive as fallback) |
 | `GET /map/{name}/leaves?z=` | packed bitmap of which cells hold a render — 1 bit per cell, `X-Zoom`/`X-Side` headers |
+| `GET /map/{name}/axes?x=&y=` | row/column headers measured out of the tiles' tags; `[start, end)` runs in archive tile units |
+| `GET /map/models?m=sha256:name` | where those models came from, out of the optional model catalogue; repeat `m` per model, either half may be empty |
 
 `meta.json` and `/map/list` also carry **`store_bounds`** / `store_min_zoom` /
 `store_max_zoom` / `store_tiles` whenever a store exists. The header's own
@@ -542,7 +644,11 @@ python tools/pmtiles_map.py --dump <map> <z> <x> <y> out.webp
 
 python tools/pmtiles_import.py <dir-or-.7z> --map-name <map> [--dry-run]
 
-python tools/pmtiles_map_test.py            # 50 checks, no ComfyUI needed
+python tools/backfill_model_links.py --all [--dry-run] [--report]
+python tools/backfill_model_links.py <map> [--force] [--catalog PATH]
+python tools/backfill_model_links.py --all --renames lora_rename.tsv
+
+python tools/pmtiles_map_test.py            # 208 checks, no ComfyUI needed
 python tools/pmtiles_map_test.py --bench 1000
 ```
 
