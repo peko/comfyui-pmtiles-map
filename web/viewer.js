@@ -260,9 +260,13 @@ function showMap(info) {
   // No ?v= cache-buster in the template: it would make every rebuild a new URL
   // for every tile, i.e. a full reload. Freshness comes from per-tile ETags,
   // and only the tiles the change feed names get refetched.
+  // Kept so a second layer can be built from the same source -- frozen.js
+  // mirrors this one into its strips, and reading `layer._url` back out would
+  // be reading a private that reloadTiles() rewrites with a cache-buster.
+  state.tileUrl = `/map/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`
+    + `?source=${state.source}`;
   state.layer = L.tileLayer(
-    `/map/${encodeURIComponent(info.name)}/tiles/{z}/{x}/{y}.webp`
-    + `?source=${state.source}`,
+    state.tileUrl,
     {
       tileSize,
       // Never let the map zoom far below the shallowest level the archive
@@ -337,6 +341,8 @@ function showMap(info) {
   if (typeof likesMapChanged === 'function') likesMapChanged();
   // axes.js: the row/column names come from this archive's own tags.
   if (typeof axesMapChanged === 'function') axesMapChanged(info);
+  // frozen.js: the pinned first row/column belong to this archive's grid.
+  if (typeof frozenMapChanged === 'function') frozenMapChanged(info);
 
   // Subscribe from "now": what is on screen was just fetched, so there is no
   // backlog worth replaying.
@@ -625,11 +631,14 @@ function openPreview(coord, meta) {
     el('preview-caption').textContent = `${label} — no stored image for this tile`;
   };
   el('preview').hidden = false;
+  // compare.js, if it loaded: pick the reference and lay the pair out.
+  if (typeof compareOpened === 'function') compareOpened(coord, meta);
 }
 
 function closePreview() {
   el('preview').hidden = true;
   el('preview-img').src = '';        // stop a large download we no longer need
+  if (typeof compareClosed === 'function') compareClosed();
 }
 
 map.on('dblclick', async (ev) => {
@@ -720,6 +729,7 @@ el('source-picker').addEventListener('change', (ev) => {
 registerTab('info');
 registerTab('search');
 registerTab('saved');
+registerTab('config');
 registerTab('help');
 el('panel-toggle').addEventListener('click', () => setPanel(el('panel').classList.contains('hidden')));
 
@@ -1278,6 +1288,9 @@ function applyChanges(payload) {
   if (payload.changes && payload.changes.length) {
     refreshTiles(payload.changes, state.seq);
     followChanges(payload.changes);
+    // frozen.js keeps its own layers, which the targeted refresh above does
+    // not reach.
+    if (typeof frozenChanged === 'function') frozenChanged(payload.changes);
     if (state.selection) {
       const hit = payload.changes.some(([z, x, y]) => z === state.selection.z
         && x === state.selection.x && y === state.selection.y);
@@ -1426,6 +1439,51 @@ el('map-picker').addEventListener('change', (ev) => {
   selectMap(ev.target.value);
   ev.target.blur();          // hand the number keys back to the document
 });
+
+/* Shift + arrows step exactly one render.
+ *
+ * Leaflet's own keyboard handler pans 80 px per arrow and triples that for
+ * shift -- a number of pixels, which on a grid of renders is the wrong unit.
+ * The step here is one cell: `render_block` from the map, projected at the
+ * current zoom, so one press is one image whatever the zoom, the tile size or
+ * the block's shape.
+ *
+ * Registered in the CAPTURE phase and stopped there. Leaflet listens on the
+ * map container, which is a descendant of window, so a bubbling listener would
+ * run only after its 240 px pan had already happened -- both would move.
+ */
+const ARROW_STEPS = {
+  ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+};
+
+/** One render's size in *screen* pixels, or null if the map does not say. */
+function renderStep() {
+  const info = state.meta;
+  if (!info || typeof info.max_zoom !== 'number') return null;
+  const block = /^(\d+)x(\d+)$/.exec(String(info.render_block || ''));
+  const nx = block ? Number(block[1]) : 1;
+  const ny = block ? Number(block[2]) : 1;
+  // Archive tile units at the leaf zoom -> container pixels at the zoom we are
+  // actually looking at, the same conversion the frozen strips use.
+  const origin = map.latLngToContainerPoint(
+    map.unproject(L.point(0, 0), info.max_zoom));
+  const corner = map.latLngToContainerPoint(
+    map.unproject(L.point(TILE_PX, TILE_PX), info.max_zoom));
+  return { x: (corner.x - origin.x) * nx, y: (corner.y - origin.y) * ny };
+}
+
+window.addEventListener('keydown', (ev) => {
+  if (!ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const step = ARROW_STEPS[ev.key];
+  if (!step) return;
+  const tag = (ev.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
+  const by = renderStep();
+  if (!by) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  map.panBy([step[0] * by.x, step[1] * by.y], { animate: false });
+}, true);
 
 /* 1-9 select the nth archive. Same position, same zoom, different rendering --
  * which is the whole point of switching. */

@@ -23,26 +23,11 @@ archive: reads the .pmtiles itself — what would be uploaded to a CDN.">src
   </label>
   <span id="stats" class="stats">loading…</span>
   <span class="spacer"></span>
-  <label class="toggle"><input type="checkbox" id="grid-toggle"> tile grid</label>
-  <label class="toggle" title="shift-drag approves (green outline), alt-drag rejects
-(dims the tiles), ctrl-drag deselects. Esc clears. (key: x)"><input type="checkbox" id="select-toggle"> mark</label>
-  <label class="toggle" title="per-tile z/x/y, map zoom and corner lat/lng, with the
-border coloured when the tile is upscaled or over-zoomed rather than stored (key: d)"><input type="checkbox" id="debug-toggle"> debug</label>
-  <label class="toggle" title="row and column headers along the edges of the map,
-like a spreadsheet's frozen headers. The names come from the renders' own tags;
-only what is on screen is drawn (key: i)"><input type="checkbox" id="axes-toggle"> index</label>
-  <select id="axis-y-key" title="which tag names the rows" hidden></select>
-  <select id="axis-x-key" title="which tag names the columns" hidden></select>
   <span id="sel-info" class="sel-info" hidden>
     <span id="sel-count"></span>
     <button id="sel-copy" class="icon" title="copy the selected coordinates as JSON">copy</button>
     <button id="sel-clear" class="icon" title="clear the selection (Esc)">clear</button>
   </span>
-  <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
-  <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
-  <label class="toggle" title="pan to each render as it lands, so a long run can be
-watched without touching the mouse. Needs live; a render already fully on screen
-does not move the map."><input type="checkbox" id="follow-toggle"> follow new</label>
   <button id="reload-tiles" class="icon" title="refetch every visible tile (key: r)">⟳</button>
   <select id="pyramid-mode" title="how the zoom pyramid is built.
 scale: average four tiles into one — the classic pyramid.
@@ -68,6 +53,7 @@ cursor was made (clicking the map opens this)">info</button>
       <button id="tab-search" class="tab active" role="tab">search</button>
       <button id="tab-saved" class="tab" role="tab">liked <span id="saved-count" class="badge"></span></button>
       <button id="tab-marks" class="tab" role="tab">marks <span id="marks-count" class="badge"></span></button>
+      <button id="tab-config" class="tab tab-narrow" role="tab" title="settings: what the map draws, and what it does as renders land">⚙</button>
       <button id="tab-help" class="tab tab-narrow" role="tab" title="what everything does (key: ?)">?</button>
     </div>
 
@@ -131,6 +117,41 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
         double-click a name to rename.</div>
     </section>
 
+    <section id="pane-config" class="pane-body config" role="tabpanel" hidden>
+      <h4>the map</h4>
+      <label class="toggle"><input type="checkbox" id="grid-toggle"> tile grid</label>
+      <label class="toggle" title="shift-drag approves (green outline), alt-drag rejects
+(dims the tiles), ctrl-drag deselects. Esc clears. (key: x)"><input type="checkbox" id="select-toggle"> mark</label>
+      <label class="toggle" title="per-tile z/x/y, map zoom and corner lat/lng, with the
+border coloured when the tile is upscaled or over-zoomed rather than stored (key: d)"><input type="checkbox" id="debug-toggle"> debug</label>
+
+      <h4>rows and columns</h4>
+      <label class="toggle" title="row and column headers along the edges of the map,
+like a spreadsheet's frozen headers. The names come from the renders' own tags;
+only what is on screen is drawn (key: i)"><input type="checkbox" id="axes-toggle"> index</label>
+      <div class="row">
+        <select id="axis-y-key" title="which tag names the rows" hidden></select>
+        <select id="axis-x-key" title="which tag names the columns" hidden></select>
+      </div>
+      <select id="freeze-mode" title="pin the first row and/or column of renders against
+the edge of the map, the way a spreadsheet freezes panes — on a model x lora sweep
+those are the two baselines every other cell is read against. A strip is one render
+thick, up to 256 px; past that it crops to the middle of the row or column — and a
+drag that starts ON a strip scrolls that crop within its own render">
+        <option value="off">freeze: off</option>
+        <option value="row">freeze: row</option>
+        <option value="col">freeze: col</option>
+        <option value="both">freeze: both</option>
+      </select>
+
+      <h4>as renders land</h4>
+      <label class="toggle"><input type="checkbox" id="live-toggle" checked> live</label>
+      <label class="toggle" title="flash tiles as they change"><input type="checkbox" id="flash-toggle" checked> flash</label>
+      <label class="toggle" title="pan to each render as it lands, so a long run can be
+watched without touching the mouse. Needs live; a render already fully on screen
+does not move the map."><input type="checkbox" id="follow-toggle"> follow new</label>
+    </section>
+
     <section id="pane-help" class="pane-body help" role="tabpanel" hidden>
       <h3>The map</h3>
       <dl>
@@ -139,7 +160,16 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
         <dt>click</dt><dd>show how that render was made, in the <b>info</b> tab
           — which the click opens</dd>
         <dt>double-click</dt><dd>the full original image, stitched from the
-          lossless store rather than the archive's WebP</dd>
+          lossless store rather than the archive's WebP. <b>compare</b> in its
+          bar puts a second render beside it — <b>side by side</b>, or
+          <b>slider</b> with the two superimposed under a divider you drag. The
+          reference is the render you opened previously, or cell 0,0 if this is
+          the first; the two scrollbars walk it along its row and down its
+          column while the main image stays put</dd>
+        <dt>arrows</dt><dd>pan by a screenful's eighth, Leaflet's own step</dd>
+        <dt><kbd>shift</kbd>+arrows</dt><dd>step exactly <b>one render</b> — the
+          cell size comes from the map, so one press is one image at any zoom,
+          tile size or block shape</dd>
       </dl>
       <p class="hint">Zoom is bounded by what the archive holds — two levels
         below its shallowest, one above its deepest. If ⛰ <b>build</b> is
@@ -153,27 +183,6 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
         <dt>src</dt><dd><b>store</b> reads live from SQLite (a render appears the
           moment it is saved); <b>archive</b> reads the .pmtiles itself — what
           would be uploaded</dd>
-        <dt>tile grid</dt><dd>outline every tile</dd>
-        <dt>mark</dt><dd>the marking overlay — see below (<kbd>x</kbd>)</dd>
-        <dt>debug</dt><dd>per tile: <code>z/x/y</code>, map zoom, size and corner
-          lat/lng. The border says where the tile came from: blue stored, green
-          upscaled from a shallower level, amber over-zoomed past the deepest
-          (<kbd>d</kbd>)</dd>
-        <dt>index</dt><dd>row and column headers along the edges, the way a
-          spreadsheet freezes them (<kbd>i</kbd>). The names are the renders'
-          own tags — the two pickers beside the box choose which tag names the
-          rows and which the columns, and the map's own tags are what they
-          offer. A header stays at the edge while any part of its row or column
-          is on screen, and clicking it frames that row or column. A map that
-          is not a table (one block per prompt, a lattice of models inside it)
-          has no axis to name and says so</dd>
-        <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
-          each one as it changes</dd>
-        <dt>follow new</dt><dd>pan to each render as it lands — a long run can be
-          watched without touching the mouse. Only the deepest level counts, so
-          building the pyramid does not drag the view around; a render already
-          fully on screen is outlined but does not move the map. Needs
-          <b>live</b></dd>
         <dt>⟳</dt><dd>refetch everything visible without moving (<kbd>r</kbd>)</dd>
         <dt>⛰ build</dt><dd>build the zoom pyramid and re-serialize the archive.
           The picker beside it chooses how: <b>scale</b> averages four tiles into
@@ -182,6 +191,47 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
           instead, so the shallow levels stay legible rather than turning to
           static. Building records the choice on the map</dd>
         <dt>☰</dt><dd>hide/show this panel (<kbd>b</kbd>)</dd>
+      </dl>
+
+      <h3>⚙ config</h3>
+      <p>Everything the map draws and everything it does as renders land. These
+        lived in the top bar until there were too many of them.</p>
+      <dl>
+        <dt>tile grid</dt><dd>outline every tile</dd>
+        <dt>mark</dt><dd>the marking overlay — see below (<kbd>x</kbd>)</dd>
+        <dt>debug</dt><dd>per tile: <code>z/x/y</code>, map zoom, size and corner
+          lat/lng. The border says where the tile came from: blue stored, green
+          upscaled from a shallower level, amber over-zoomed past the deepest
+          (<kbd>d</kbd>)</dd>
+        <dt>index</dt><dd>row and column headers along the edges, the way a
+          spreadsheet freezes them (<kbd>i</kbd>). The names are the renders'
+          own tags — the two pickers under the box choose which tag names the
+          rows and which the columns, and the map's own tags are what they
+          offer. A header stays at the edge while any part of its row or column
+          is on screen, and clicking it frames that row or column. A map that
+          is not a table (one block per prompt, a lattice of models inside it)
+          has no axis to name and says so</dd>
+        <dt>freeze</dt><dd>pins the first <b>row</b> and/or <b>col</b>umn of
+          renders against the edge of the map — a spreadsheet's frozen panes,
+          where <b>index</b> is its frozen headers. On a model × lora sweep
+          that is each model with no LoRA and each LoRA on the base model: the
+          baselines every other cell is read against, kept on screen next to
+          whatever you are looking at. The strips scroll with the map and have
+          no controls of their own. Each is one render thick, but never more
+          than 256 px: zoom past that and the strip stops growing and shows the
+          middle of the row or column instead, since two strips that kept pace
+          with the zoom would leave no map between them. A drag that
+          <i>starts on a strip</i> then scrolls that crop along the axis the
+          strip froze — the row strip up and down, the column strip left and
+          right — as far as its own render and no further. The map pans under
+          it at the same time, exactly as a drag anywhere else would</dd>
+        <dt>live</dt><dd>refresh tiles as renders land; <b>flash</b> highlights
+          each one as it changes</dd>
+        <dt>follow new</dt><dd>pan to each render as it lands — a long run can be
+          watched without touching the mouse. Only the deepest level counts, so
+          building the pyramid does not drag the view around; a render already
+          fully on screen is outlined but does not move the map. Needs
+          <b>live</b></dd>
       </dl>
 
       <h3>info</h3>
@@ -254,6 +304,7 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 
       <h3>Everywhere</h3>
       <dl>
+        <dt><kbd>shift</kbd>+arrows</dt><dd>step one render along the grid</dd>
         <dt><kbd>b</kbd></dt><dd>hide/show this panel</dd>
         <dt><kbd>?</kbd></dt><dd>this help</dd>
         <dt><kbd>Esc</kbd></dt><dd>close the preview, else clear the marks</dd>
@@ -263,14 +314,45 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 </main>
 
 <div id="preview" hidden>
+  <!-- A four column grid: caption, image, the reference's vertical scrollbar,
+       caption. The controls sit above the image and the row scrollbar below it,
+       both in the image's own column -- hung off the frame instead, they float
+       over the empty space beside the captions. -->
   <div id="preview-frame">
-    <img id="preview-img" alt="full render">
     <div id="preview-bar">
-      <span id="preview-caption"></span>
       <span class="spacer"></span>
+      <select id="compare-mode" title="compare this render with another one: the
+previous render you opened, or cell 0,0 if this is the first. The two scrollbars
+move the reference along its row and down its column">
+        <option value="off">compare: off</option>
+        <option value="side">compare: side by side</option>
+        <option value="slider">compare: slider</option>
+      </select>
       <a id="preview-link" href="#" target="_blank" rel="noopener">open raw</a>
       <button id="preview-close" class="icon" title="close (Esc)">✕</button>
     </div>
+
+    <div id="main-note" class="pm-note"><span id="preview-caption"></span></div>
+
+    <!-- Off: just the render that was clicked. side: the two next to each
+         other. slider: superimposed, the reference clipped to the RIGHT of a
+         draggable divider -- the compared-with render is on the right in both
+         modes, which is why its caption can be. -->
+    <div id="preview-pair">
+      <img id="preview-img" alt="full render">
+      <img id="preview-ref" alt="reference render">
+      <div id="preview-divider" hidden></div>
+    </div>
+
+    <!-- Walks the reference down its column, beside the image it moves... -->
+    <input id="ref-row" class="pm-refscroll" type="range" min="0" max="0" value="0"
+           title="scroll the reference down its column">
+
+    <div id="ref-note" class="pm-note"><span id="ref-caption"></span></div>
+
+    <!-- ...and along its row, under it. -->
+    <input id="ref-col" class="pm-refscroll" type="range" min="0" max="0" value="0"
+           title="scroll the reference along its row">
   </div>
 </div>
 
@@ -279,5 +361,7 @@ and is not marked yet — the last step of a triage pass">reject rest</button>
 <script src="assets/overlays.js"></script>
 <script src="assets/like.js"></script>
 <script src="assets/axes.js"></script>
+<script src="assets/frozen.js"></script>
+<script src="assets/compare.js"></script>
 </body>
 </html>

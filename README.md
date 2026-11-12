@@ -321,7 +321,7 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
 * **Live updates**: the saver records which tiles it wrote; the viewer subscribes
   to that feed and refreshes *only those tiles*, flashing each one. No layer
   reload, no polling storm.
-* **follow new** (top bar, off by default): pans to each render as it lands, so a
+* **follow new** (**⚙** tab, off by default): pans to each render as it lands, so a
   long run can be watched without touching the mouse. Only events at the deepest
   level are followed — a pyramid build writes derived tiles through the same log
   and would otherwise drag the view across the shallow levels — and a burst is
@@ -333,8 +333,15 @@ python tools/serve_pmtiles.py --port 8899        # binds 0.0.0.0
   line links to where that model came from — Civitai or HuggingFace — under its
   own name, version, base model and author. **Without a catalogue nothing
   changes**: the names stay the plain text they always were. See below.
-* **index** (top bar, `i`): row and column headers along the edges of the map,
+* **index** (**⚙** tab, `i`): row and column headers along the edges of the map,
   the way a spreadsheet freezes them. See below.
+* **freeze** (**⚙** tab): pins the first row and/or column of *renders* against
+  the edge — the baselines a sweep is read against. See below.
+* **compare** (in the double-click preview): a second render beside the one you
+  opened — **side by side**, or **slider** with the two superimposed under a
+  divider you drag. The reference is whatever you opened *previously*, or cell
+  0,0 if this is the first, and two scrollbars walk it along its row and down
+  its column without touching the main image. Optional, off by default.
 * **Search** (`/`): title, tags and prompt, one result per render.
   Clicking frames the whole render.
 * **Liked list**: saved points of interest in `localStorage`, drag to reorder,
@@ -406,6 +413,35 @@ its content are degrees: ticks from lat/lng intervals, text from a dd/dms
 formatter, no hook for arbitrary strings. `web/axes.js` borrows the mechanism,
 about thirty lines of it, and gets its ticks from this map's own grid.
 
+### Frozen panes (`freeze`)
+
+Where `index` freezes the headers, `freeze` pins the renders themselves: the
+first **row**, the first **col**umn, or **both**. On a model × lora sweep those
+are each model with no LoRA and each LoRA on the base model — the two baselines
+every other cell is read against, and the first thing to scroll off the screen.
+
+Each strip is another Leaflet map over the main one, with the same tile layer
+and zoom: slaved to the main map on one axis, nailed to row 0 / column 0 on the
+other. No controls, no interaction, `pointer-events: none` — a drag that starts
+on a strip belongs to the map underneath, as it would on a frozen pane you
+cannot scroll independently.
+
+A strip is one render thick and tracks that size as you zoom, **up to 256 px**.
+Past that it stops growing and crops to the middle of the row or column — at
+1:1 on a 1024 px render two untruncated strips would be the whole screen.
+
+The middle is not always the part worth comparing, so **a drag that starts on a
+strip scrolls that crop** along the axis the strip froze: the row strip
+vertically, the column strip horizontally, each clamped to its own render. The
+map pans underneath at the same time, as it would for a drag anywhere else —
+the strips keep `pointer-events: none` and are hit-tested at `pointerdown`
+instead, which is also what confines this to gestures that *began* on one.
+
+The alignment detail worth knowing: Leaflet centres a view in its own
+container, so a strip inset from the top by `d` is `d` shorter and handing it
+the main map's centre would offset its content by `d/2`. It gets the latlng the
+main map shows at container `(height + d) / 2` instead — the same pixel row.
+
 ### Linking a render back to its models (optional)
 
 A render records the models it used as file names, which is what ran but not
@@ -469,7 +505,7 @@ already resolved and writes nothing.
 ### Selecting tiles, and seeing which level they came from
 
 Two canvas overlays, both off by default, toggled by the `mark` and `debug`
-checkboxes in the top bar (`x` and `d`).
+checkboxes in the **⚙** tab (`x` and `d`).
 
 **`mark`** — triage tiles by dragging:
 
@@ -590,6 +626,7 @@ an epsilon or `floor`/`ceil` silently takes an extra row.
 | key | |
 |---|---|
 | `1`–`9` | switch archive (view kept) |
+| `shift`+arrows | step exactly one render along the grid |
 | `/` | focus search |
 | `s` | save the selected tile to the liked list |
 | `b` | show/hide the side panel |

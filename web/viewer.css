@@ -83,6 +83,9 @@ button.icon.stale::after { content: ' •'; }
    coordinate the projection already gave us, with no offset to keep in step;
    the corner patch covers where they cross. */
 :root { --axis-h: 22px; --axis-w: 22px; }
+/* One caption column each side of the preview, plus the vertical scrollbar and
+   the three 8px gaps between them: what the images may NOT use. */
+:root { --pm-note-w: 190px; --pm-notes: 428px; }
 .pm-axis { position: absolute; z-index: 650; pointer-events: none; overflow: hidden; }
 .pm-axis-x { top: 0; left: 0; right: 0; height: var(--axis-h); }
 .pm-axis-y { top: 0; left: 0; bottom: 0; width: var(--axis-w); }
@@ -129,6 +132,20 @@ button.icon.stale::after { content: ' •'; }
      the side it is NOT meant to appear. */
   background: linear-gradient(to left, rgba(0, 0, 0, .5), rgba(0, 0, 0, 0));
 }
+/* Frozen panes (frozen.js): the first row/column of renders, pinned. Each is a
+   whole Leaflet map of its own, stacked over the main one -- above its panes
+   (z-index 400) and below the axis labels (650), so a column name still sits
+   on top of the baseline render it names. Nothing in them is interactive: the
+   strip never takes a drag meant for the map underneath. */
+.pm-frozen {
+  position: absolute; z-index: 500; pointer-events: none; overflow: hidden;
+  background: var(--bg);
+}
+.pm-frozen[hidden] { display: none; }
+.pm-frozen-row { top: 0; left: 0; right: 0; border-bottom: 1px solid rgba(255, 255, 255, .45); }
+.pm-frozen-col { left: 0; bottom: 0; border-right: 1px solid rgba(255, 255, 255, .45); }
+.pm-frozen .leaflet-container { background: var(--bg); }
+
 /* Leaflet's zoom control lives exactly where the corner patch goes. */
 #map.axes .leaflet-top.leaflet-left { margin: var(--axis-h) 0 0 var(--axis-w); }
 .sel-info { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
@@ -225,16 +242,82 @@ pre {
   background: rgba(8, 9, 12, .88); backdrop-filter: blur(2px);
 }
 #preview[hidden] { display: none; }
+/* Four columns, three rows. The captions are fixed columns, the image column
+   is sized by the image, and the reference's two scrollbars each sit on the
+   edge they scroll -- the row one on its own line under the image, not in the
+   image's row where it made the vertical one look bolted on.
+
+     .          controls      .        .
+     main note  image(s)      v-scroll ref note
+     .          h-scroll      .        .
+*/
 #preview-frame {
-  display: flex; flex-direction: column; gap: 8px;
+  display: grid;
+  grid-template-columns: var(--pm-note-w) auto 14px var(--pm-note-w);
+  grid-template-rows: auto auto auto;
+  gap: 6px 8px;
   max-width: 96vw; max-height: 94vh;
 }
-#preview-img {
-  max-width: 96vw; max-height: 86vh; object-fit: contain;
+#preview-bar  { grid-area: 1 / 2 / 2 / 3; }
+#main-note    { grid-area: 2 / 1 / 3 / 2; }
+#preview-pair { grid-area: 2 / 2 / 3 / 3; }
+#ref-row      { grid-area: 2 / 3 / 3 / 4; }
+#ref-note     { grid-area: 2 / 4 / 3 / 5; }
+#ref-col      { grid-area: 3 / 2 / 4 / 3; }
+#preview-img, #preview-ref {
+  max-height: 84vh; object-fit: contain;
   border: 1px solid var(--line); border-radius: 6px; background: #0d0f13;
   /* A render is pixel art at this scale; smoothing it is a lie. */
   image-rendering: pixelated;
 }
+#preview-ref[hidden] { display: none; }
+
+/* Compare (compare.js). `side` is two images in a row; `wipe` superimposes
+   them and clips the reference to the RIGHT of the divider -- the render being
+   compared against sits on the right in both modes, which is why its caption
+   can sit on the right too. */
+#preview-pair { position: relative; display: flex; gap: 8px; touch-action: none; }
+/* The images get the width the two caption columns and the scrollbar leave
+   them -- they must shrink, not push the captions off screen. The pair hugs
+   its images rather than filling the row, because in `wipe` the reference is
+   positioned against the pair's box and that box has to BE the main image:
+   letterbox it and the two halves stop lining up. */
+#preview-frame:not(.compare-on) #preview-img,
+#preview-pair.wipe > #preview-img { max-width: calc(96vw - var(--pm-notes)); }
+#preview-pair.side > img { max-width: calc((96vw - var(--pm-notes)) / 2); }
+#preview-pair.wipe { --split: 50%; cursor: ew-resize; }
+#preview-pair.wipe > #preview-ref {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  /* The reference is the RIGHT half: inset() clips from each edge, so the left
+     inset is everything up to the split. */
+  clip-path: inset(0 0 0 var(--split));
+}
+#preview-divider {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .8); pointer-events: none;
+}
+#preview-divider[hidden] { display: none; }
+
+/* A caption beside its image, never under it. Under, the caption was as wide
+   as its text, so it set the column's width -- and since the reference's
+   caption changes with every notch of the scrollbar, the whole preview jumped
+   left and right as you dragged. A fixed column that wraps cannot do that. */
+.pm-note {
+  width: var(--pm-note-w);
+  color: var(--dim); font-size: 12px; line-height: 1.4;
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden;
+}
+#ref-note { text-align: right; }
+
+/* The two virtual scrollbars. Reserved rather than removed when compare is
+   off: switching modes must not move the image you came to look at. */
+.pm-refscroll { accent-color: var(--accent); margin: 0; }
+#ref-row { writing-mode: vertical-rl; width: 14px; }
+#ref-col { width: 100%; height: 14px; }
+#preview-frame:not(.compare-on) #ref-col,
+#preview-frame:not(.compare-on) #ref-row,
+#preview-frame:not(.compare-on) #ref-note { visibility: hidden; }
+#preview-frame:not(.compare-on) #preview-ref { display: none; }
 #preview-bar {
   display: flex; align-items: center; gap: 10px; color: var(--dim);
   font-variant-numeric: tabular-nums;
@@ -242,7 +325,7 @@ pre {
 #preview-bar .spacer { flex: 1; }
 #preview-bar a { color: var(--accent); text-decoration: none; }
 #preview-bar a:hover { text-decoration: underline; }
-#preview-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 
 .leaflet-container { background: #0d0f13; }
 .leaflet-control-attribution { background: rgba(30,33,40,.8) !important; color: var(--dim) !important; }
@@ -251,6 +334,20 @@ pre {
 /* While selecting, the pointer is a tool rather than a hand. Leaflet adds
    .leaflet-crosshair itself once a drag starts; this covers the hover. */
 #map.selecting .leaflet-container { cursor: crosshair; }
+/* The settings pane. These used to be in the top bar, which ran out of room
+   once the map grew headers and frozen panes; a checkbox per line is also
+   where there is space to say what each one does. */
+.config h4 {
+  margin: 14px 0 4px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--accent); font-weight: 500;
+}
+.config h4:first-child { margin-top: 0; }
+.config label.toggle { display: flex; align-items: center; gap: 7px; padding: 3px 0; }
+.config .row { display: flex; gap: 6px; margin: 4px 0; }
+.config .row select { flex: 1; min-width: 0; }
+.config select { margin: 4px 0; }
+.config select[hidden] { display: none; }
+
 #pane-marks input[type="search"] { margin: 10px 0 4px; }
 #pane-marks .actions { flex-wrap: wrap; }
 
